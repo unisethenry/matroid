@@ -336,6 +336,38 @@ class _net:
       typeLayer = 'Linear'
       dimensionLayer = self.getLayerDimensionL2L(dimensionInput, dimensionOutput, sizeLinear)
     self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
+    return True
+
+  def getPath(self, nameLayerStart, nameLayerEnd):
+    dictPath = {}
+    listNameLayerNext = dictGraph[nameLayerStart]
+    for nameLayerNext in listNameLayerNext:
+      dictPath[nameLayerNext] = ''
+      if nameLayerNext == nameLayerEnd:
+        dictPath[nameLayerNext] = nameLayerEnd
+      elif 'output' in nameLayerNext:
+        del dictPath[nameLayerNext]
+      else:
+        dictPath[nameLayerNext] = self.getPath(nameLayerNext, nameLayerEnd)
+        if not dictPath[nameLayerNext]:
+          del dictPath[nameLayerNext]
+    return dictPath
+
+  def actionRemove(self, positionStart, positionEnd):
+    print ()
+    print ('#############')
+    print ('ACTION REMOVE')
+    print ('#############')
+    # TODO: implement also recurrent connection
+    if positionStart > positionEnd:
+      return False
+    nameLayerStart = self.getLayerName(positionStart)
+    nameLayerEnd = self.getLayerName(positionEnd)
+    # TODO: parallel layer not allowed
+    if nameLayerStart == nameLayerEnd:
+      return False
+    dictPath = self.getPath(nameLayerStart, nameLayerEnd)
+    return True
 
 input1 = _layer('input1', 'Input', [120, 120, 3])
 input2 = _layer('input2', 'Input', [32])
@@ -377,7 +409,6 @@ while True:
   elif actionRemove > actionAdd and actionRemove > actionRead:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
-    lengthPathRemove = tensorAction[10]
-    #mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
+    mk1.actionRemove(positionStartRemove, positionEndRemove)
   elif actionRead > actionAdd and actionRead > actionRemove:
     continue
