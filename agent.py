@@ -37,7 +37,6 @@ class _net:
     self.listNameLayer = listNameLayer
     self.dictLayer = dictLayer
     self.dictGraph = dictGraph
-    return
 
   def exitGateway(self, number):
     print (self.listNameInput)
@@ -342,9 +341,9 @@ class _net:
     dictPath = {}
     listNameLayerNext = dictGraph[nameLayerStart]
     for nameLayerNext in listNameLayerNext:
-      dictPath[nameLayerNext] = ''
+      dictPath[nameLayerNext] = {}
       if nameLayerNext == nameLayerEnd:
-        dictPath[nameLayerNext] = nameLayerEnd
+        continue
       elif 'output' in nameLayerNext:
         del dictPath[nameLayerNext]
       else:
@@ -352,6 +351,17 @@ class _net:
         if not dictPath[nameLayerNext]:
           del dictPath[nameLayerNext]
     return dictPath
+
+  def flattenPath(self, dictPath):
+    listPath = []
+    if not dictPath:
+      listPath.append([])
+    else:
+      for nameLayer in dictPath:
+        listPathBranch = self.flattenPath(dictPath[nameLayer])
+        for pathBranch in listPathBranch:
+          listPath.append([nameLayer] + pathBranch)
+    return listPath
 
   def actionRemove(self, positionStart, positionEnd):
     print ()
@@ -366,7 +376,14 @@ class _net:
     # TODO: parallel layer not allowed
     if nameLayerStart == nameLayerEnd:
       return False
+    # pre-requisite for more than 1 distinct path
+    if not (len(self.dictGraph[nameLayerStart]) > 1 and len(self.dictGraphReversed[nameLayerEnd]) > 1):
+      return False
     dictPath = self.getPath(nameLayerStart, nameLayerEnd)
+    # there are less than 2 distinct paths
+    if len(dictPath) < 2:
+      return False
+    listPath = self.flattenPath(dictPath)
     return True
 
 input1 = _layer('input1', 'Input', [120, 120, 3])
