@@ -124,9 +124,9 @@ class _net:
       dictDimensionInput = {}
       dimensionInputResult = []
       dimensionOutputResult = []
-      #####################
-      # for input dimension
-      #####################
+      #################
+      # input dimension
+      #################
       for nameLayerBackward in self.dictGraphReversed[nameLayer]:
         layerBackward = self.dictLayer[nameLayerBackward]
         dimensionOutputLayerBackward = layerBackward.dimensionOutputResult
@@ -338,6 +338,7 @@ class _net:
     return True
 
   def getPath(self, nameLayerStart, nameLayerEnd):
+    # get all path originates from nameLayerStart and ends at nameLayerEnd
     dictPath = {}
     listNameLayerNext = dictGraph[nameLayerStart]
     for nameLayerNext in listNameLayerNext:
@@ -353,6 +354,7 @@ class _net:
     return dictPath
 
   def flattenPath(self, dictPath):
+    # seperate dictPath into list of path
     listPath = []
     if not dictPath:
       listPath.append([])
@@ -362,6 +364,36 @@ class _net:
         for pathBranch in listPathBranch:
           listPath.append([nameLayer] + pathBranch)
     return listPath
+
+  def filterPath(self, listPath):
+    # filter listPath which includes layer(s) in only path of input or output
+    listNameLayer = []
+    for nameInput in listNameInput:
+      listNext = self.dictGraph[nameInput]
+      while len(listNext) == 1:
+        nameNext = listNext[0]
+        if 'output' in nameNext:
+          break
+        listNameLayer.append(nameNext)
+        listNext = self.dictGraph[nameNext]
+    for nameOutput in listNameOutput:
+      listPrevious = self.dictGraphReversed[nameOutput]
+      while len(listPrevious) == 1:
+        namePrevious = listPrevious[0]
+        if 'input' in namePrevious:
+          break
+        listNameLayer.append(namePrevious)
+        listPrevious = self.dictGraphReversed[namePrevious]
+    listPathValid = []
+    for path in listPath:
+      isPathClear = True
+      for nameLayer in path:
+        if nameLayer in listNameLayer:
+          isPathClear = False
+          break
+      if isPathClear:
+        listPathValid.append(path)
+    return listPathValid
 
   def actionRemove(self, positionStart, positionEnd):
     print ()
@@ -384,6 +416,7 @@ class _net:
     if len(dictPath) < 2:
       return False
     listPath = self.flattenPath(dictPath)
+    listPathValid = self.filterPath(listPath)
     return True
 
 input1 = _layer('input1', 'Input', [120, 120, 3])
