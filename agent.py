@@ -1,5 +1,7 @@
 import copy
-import numpy as np
+import random
+
+historyAction = []
 
 class _layer:
   name = ''
@@ -90,7 +92,20 @@ class _net:
       for nameLayerEnd in self.dictGraph[nameLayerStart]:
         self.dictGraphReversed[nameLayerEnd].append(nameLayerStart)
 
+  def computeReversedGraphAlone(self, dictGraph):
+    dictReversed = {}
+    for nameLayer in self.listNameLayer:
+      dictReversed[nameLayer] = []
+    for nameOutput in self.listNameOutput:
+      dictReversed[nameOutput] = []
+    for nameLayerStart in dictGraph:
+      for nameLayerEnd in dictGraph[nameLayerStart]:
+        dictReversed[nameLayerEnd].append(nameLayerStart)
+    return dictReversed
+
   def computeLayerPrecedence(self):
+    self.dictGraphReversed = {}
+    self.computeReversedGraph()
     listNameLayer = []
     listNameLayerNotReady = copy.deepcopy(self.listNameLayer)
     while listNameLayerNotReady:
@@ -110,6 +125,10 @@ class _net:
         continue
       break
     if listNameLayerNotReady:
+      print ('\nnot ready:\n', listNameLayerNotReady)
+      print ('\nready:\n', listNameLayer)
+      for nameLayer in listNameLayerNotReady:
+        print (nameLayer, self.dictGraph[nameLayer], self.dictGraphReversed[nameLayer])
       self.exitGateway(7)
     self.listNameLayer = listNameLayer
 
@@ -229,7 +248,7 @@ class _net:
     for depth in range(1, sizeOutput):
       modulusSize = sizeOutput % depth
       if modulusSize == 0:
-        sqrtSizeFeasible = np.sqrt(sizeOutput / depth)
+        sqrtSizeFeasible = (sizeOutput / depth) ** (0.5)
         if sqrtSizeFeasible.is_integer() and sqrtSizeFeasible <= sizeInput:
           if sqrtSizeFeasible < 1:
             break
@@ -335,12 +354,13 @@ class _net:
       typeLayer = 'Linear'
       dimensionLayer = self.getLayerDimensionL2L(dimensionInput, dimensionOutput, sizeLinear)
     self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
+    historyAction.append('Add')
     return True
 
   def getPath(self, nameLayerStart, nameLayerEnd):
     # get all path originates from nameLayerStart and ends at nameLayerEnd
     dictPath = {}
-    listNameLayerNext = dictGraph[nameLayerStart]
+    listNameLayerNext = self.dictGraph[nameLayerStart]
     for nameLayerNext in listNameLayerNext:
       dictPath[nameLayerNext] = {}
       if nameLayerNext == nameLayerEnd:
@@ -395,7 +415,92 @@ class _net:
         listPathValid.append(path)
     return listPathValid
 
-  def actionRemove(self, positionStart, positionEnd):
+  def getDeadEnd(self, dictGraphOriginal, dictPath):
+    dictGraph = copy.deepcopy(dictGraphOriginal)
+    listIsolated = []
+    countIsolated = -1
+    while len(listIsolated) != countIsolated:
+      countIsolated = len(listIsolated)
+      # trim path in dictGraph
+      dictGraphCopy = copy.deepcopy(dictGraph)
+      for nameLayer in dictGraphCopy:
+        for nameIsolated in listIsolated:
+          if nameIsolated in dictGraphCopy[nameLayer]:
+            # TODO: extract nameIsolated position in the dictGraph[nameLayer]
+            if nameLayer not in dictPath:
+              dictPath[nameLayer] = [nameIsolated]
+            else:
+              if nameIsolated not in dictPath[nameLayer]:
+                dictPath[nameLayer].append(nameIsolated)
+            dictGraph[nameLayer].remove(nameIsolated)
+      # locate isolated layer (in dictGraph)
+      for nameLayer in dictGraph:
+        if len(dictGraph[nameLayer]) == 0 and nameLayer not in listIsolated:
+          listIsolated.append(nameLayer)
+      # consider dictGraph only
+      if countIsolated != len(listIsolated):
+        continue
+      # locate isolated layer (in dictReversed)
+      dictReversed = self.computeReversedGraphAlone(dictGraph)
+      for nameLayer in dictReversed:
+        if len(dictReversed[nameLayer]) == 0 and nameLayer not in listIsolated:
+          listIsolated.append(nameLayer)
+          # TODO: extract all position in the dictGraph[nameLayer]
+          if nameLayer not in dictPath:
+            dictPath[nameLayer] = copy.deepcopy(dictGraph[nameLayer])
+            dictGraph[nameLayer] = []
+          else:
+            for nameNext in dictGraphCopy[nameLayer]:
+              if nameNext not in dictPath[nameLayer]:
+                dictPath[nameLayer].append(nameNext)
+                dictGraph[nameLayer].remove(nameNext)
+    return dictGraph, listIsolated, dictPath
+
+  def removePath(self, path):
+    dictGraph = copy.deepcopy(self.dictGraph)
+    listIsolated = []
+    dictPath = {}
+    for number in range(len(path) - 1):
+      nameThis = path[number]
+      nameNext = path[number + 1]
+      dictGraph[nameThis].remove(nameNext)
+      # TODO: extract position in the dictGraph[nameThis]
+      if nameThis not in dictPath:
+        dictPath[nameThis] = [nameNext]
+      else:
+        dictPath[nameThis].append(nameNext)
+    dictGraph, listIsolated, dictPath = self.getDeadEnd(dictGraph, dictPath)
+    dictReversed = self.computeReversedGraphAlone(dictGraph)
+    # modify layers' dimension
+    for nameThis in dictPath:
+      layerThis = self.dictLayer[nameThis]
+      typeThis = layerThis._type
+      dimensionThis = layerThis.dimension
+      outputThis = layerThis.dimensionOutputResult
+      listNext = dictPath[nameThis]
+      for nameNext in listNext:
+        layerNext = self.dictLayer[nameNext]
+        typeNext = layerNext._type
+        dimensionNext = layerNext.dimension
+        if typeNext == 'Conv2d':
+          dimensionNext[0] -= dimensionThis[1]
+        elif typeNext == 'Linear':
+          if typeThis == 'Conv2d':
+            dimensionNext[0] -= outputThis[0] * outputThis[1] * outputThis[2]
+          elif typeThis == 'Linear':
+            dimensionNext[0] -= dimensionThis[1]
+    # trim layer information
+    self.dictGraph = copy.deepcopy(dictGraph)
+    self.dictGraphReversed = copy.deepcopy(dictReversed)
+    for nameIsolated in listIsolated:
+      del self.dictGraph[nameIsolated]
+      del self.dictGraphReversed[nameIsolated]
+      del self.dictLayer[nameIsolated]
+      self.listNameLayer.remove(nameIsolated)
+    print ('path removal is valid:', self.isValidGraph())
+    return True
+
+  def actionRemove(self, positionStart, positionEnd, lengthPath):
     print ()
     print ('#############')
     print ('ACTION REMOVE')
@@ -417,6 +522,14 @@ class _net:
       return False
     listPath = self.flattenPath(dictPath)
     listPathValid = self.filterPath(listPath)
+    if len(listPathValid) == 0:
+      return False
+    listPathValid = sorted(listPathValid, key = len)
+    indexPath = min(int(lengthPath * len(listPathValid)), len(listPathValid) - 1)
+    pathRemove = listPathValid[indexPath]
+    pathRemove = [nameLayerStart] + pathRemove
+    self.removePath(pathRemove)
+    historyAction.append('Remove')
     return True
 
 input1 = _layer('input1', 'Input', [120, 120, 3])
@@ -439,10 +552,19 @@ mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictG
 print ('\n@@@ graph is valid:', mk1.isValidGraph(), '@@@')
 
 while True:
+  countAdd = 0
+  countRemove = 0
+  for counter in range(len(historyAction)):
+    if historyAction[counter] == 'Add':
+      countAdd += 1
+    elif historyAction[counter] == 'Remove':
+      countRemove += 1
+  print ('\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n')
+  print ('Add:', countAdd, 'Remove:', countRemove)
   # action
-  tensorAction = np.random.random(16)
-  print ('\naction')
-  print (tensorAction)
+  tensorAction = []
+  for counter in range(16):
+    tensorAction.append(random.random())
 
   actionAdd = tensorAction[0]
   actionRemove = tensorAction[1]
@@ -459,6 +581,7 @@ while True:
   elif actionRemove > actionAdd and actionRemove > actionRead:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
-    mk1.actionRemove(positionStartRemove, positionEndRemove)
+    lengthPathRemove = tensorAction[10]
+    mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
   elif actionRead > actionAdd and actionRead > actionRemove:
     continue
