@@ -66,7 +66,7 @@ class _net:
       elif typeLayer == 'Linear':
         if not (typeLayerForward == 'Linear' or typeLayerForward == 'Output'):
           self.exitGateway(2)
-      elif typeLayer == 'Input': 
+      elif typeLayer == 'Input':
         if typeLayerForward == 'Output' or not (typeLayerForward == 'Conv2d' or typeLayerForward == 'Linear'):
           self.exitGateway(3)
       else:
@@ -231,7 +231,7 @@ class _net:
     stride = min(int(sizeFilter * len(listSizeFeasible)), len(listSizeFeasible) - 1) + 1
     padding = 0
     if sizeInput == sizeOutput:
-      if sizeKernel == 1 or sizeKernel == 3: 
+      if sizeKernel == 1 or sizeKernel == 3:
         stride = 1
       if sizeKernel == 3:
         padding = 1
@@ -442,7 +442,7 @@ class _net:
       for nameLayer in dictGraph:
         if len(dictGraph[nameLayer]) == 0 and nameLayer not in listIsolated:
           listIsolated.append(nameLayer)
-      # early continue such that all isolated layers are found from dictGraph
+      # early continuing such that all isolated layers are found from dictGraph
       if countIsolated != len(listIsolated):
         continue
       # locate isolated layer (in dictReversed)
