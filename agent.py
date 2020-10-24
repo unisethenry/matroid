@@ -41,11 +41,11 @@ class _net:
     self.dictGraph = dictGraph
 
   def exitGateway(self, number):
-    print (self.listNameInput)
-    print (self.listNameLayer)
-    print (self.listNameOutput)
-    print (self.dictGraph)
-    print (self.dictGraphReversed)
+    print ('\ninput(s):', self.listNameInput)
+    print ('\nlayer(s):', self.listNameLayer)
+    print ('\noutput(s):', self.listNameOutput)
+    print ('\ngraph:\n', self.dictGraph)
+    print ('\nreversed graph:\n', self.dictGraphReversed)
     for nameLayer in self.listNameLayer:
       layer = self.dictLayer[nameLayer]
       print ()
@@ -73,14 +73,14 @@ class _net:
         self.exitGateway(4)
     return True
 
-  def areAllConnectionValid(self):
-    print ('\n@@@ connection validation @@@')
+  def validateConnection(self):
     for nameInput in self.listNameInput:
       if not self.hasValidConnection(nameInput):
         self.exitGateway(5)
     for nameLayer in self.listNameLayer:
       if not self.hasValidConnection(nameLayer):
         self.exitGateway(6)
+    print ('\n@@@ all connection are validation @@@')
     return True
 
   def computeReversedGraph(self):
@@ -125,19 +125,18 @@ class _net:
         continue
       break
     if listNameLayerNotReady:
-      print ('\nnot ready:\n', listNameLayerNotReady)
-      print ('\nready:\n', listNameLayer)
+      print ('\nlayer(s) not ready:\n', listNameLayerNotReady)
+      print ('\nlayer(s) ready:\n', listNameLayer)
       for nameLayer in listNameLayerNotReady:
         print (nameLayer, self.dictGraph[nameLayer], self.dictGraphReversed[nameLayer])
       self.exitGateway(7)
     self.listNameLayer = listNameLayer
 
-  def isValidGraph(self):
-    if not self.areAllConnectionValid():
+  def validateDimension(self):
+    if not self.validateConnection():
       self.exitGateway(8)
     self.computeReversedGraph()
     self.computeLayerPrecedence()
-    print ('\n@@@ dimension validation @@@')
     for nameLayer in self.listNameLayer:
       layer = self.dictLayer[nameLayer]
       dictDimensionInput = {}
@@ -201,7 +200,11 @@ class _net:
         if in_features != dimensionInputResult[0]:
           self.exitGateway(15)
         self.dictLayer[nameLayer].dimensionOutputResult = [out_features]
+    print ('\n@@@ all dimension are valid @@@')
     return True
+
+  def validateGraph(self):
+    return self.validateDimension()
 
   def getLayerName(self, positionLayer):
     numberLayer = len(self.listNameLayer)
@@ -296,7 +299,6 @@ class _net:
     self.dictLayer[nameLayer] = layerNew
     self.dictGraph[nameLayerStart].append(nameLayer)
     self.dictGraph[nameLayer] = [nameLayerEnd]
-    self.computeReversedGraph()
     self.computeLayerPrecedence()
     if typeLayer == 'Conv2d':
       if layerEnd._type == 'Conv2d':
@@ -317,12 +319,13 @@ class _net:
     print ('##########')
     print ('ACTION ADD')
     print ('##########')
-    # TODO: implement also recurrent connection
+    # TODO implement recurrent connection
     if positionStart > positionEnd:
       return False
+    # TODO include 'input' layer
     nameLayerStart = self.getLayerName(positionStart)
     nameLayerEnd = self.getLayerName(positionEnd)
-    # TODO: parallel layer not allowed
+    # TODO allow adding parallel layer
     if nameLayerStart == nameLayerEnd:
       return False
     layerStart = self.dictLayer[nameLayerStart]
@@ -386,7 +389,7 @@ class _net:
     return listPath
 
   def filterPath(self, listPath):
-    # filter listPath which includes layer(s) in only path of input or output
+    # filter listPath which contains layer(s) of I/O's only path
     listNameLayer = []
     for nameInput in listNameInput:
       listNext = self.dictGraph[nameInput]
@@ -416,6 +419,9 @@ class _net:
     return listPathValid
 
   def getDeadEnd(self, dictGraphOriginal, dictPath):
+    # compute resultant graph (stand-alone) after path(s) deduction
+    # find isolated layer(s)
+    # mark trimmed path(s)
     dictGraph = copy.deepcopy(dictGraphOriginal)
     listIsolated = []
     countIsolated = -1
@@ -426,7 +432,6 @@ class _net:
       for nameLayer in dictGraphCopy:
         for nameIsolated in listIsolated:
           if nameIsolated in dictGraphCopy[nameLayer]:
-            # TODO: extract nameIsolated position in the dictGraph[nameLayer]
             if nameLayer not in dictPath:
               dictPath[nameLayer] = [nameIsolated]
             else:
@@ -437,7 +442,7 @@ class _net:
       for nameLayer in dictGraph:
         if len(dictGraph[nameLayer]) == 0 and nameLayer not in listIsolated:
           listIsolated.append(nameLayer)
-      # consider dictGraph only
+      # early continue such that all isolated layers are found from dictGraph
       if countIsolated != len(listIsolated):
         continue
       # locate isolated layer (in dictReversed)
@@ -445,7 +450,6 @@ class _net:
       for nameLayer in dictReversed:
         if len(dictReversed[nameLayer]) == 0 and nameLayer not in listIsolated:
           listIsolated.append(nameLayer)
-          # TODO: extract all position in the dictGraph[nameLayer]
           if nameLayer not in dictPath:
             dictPath[nameLayer] = copy.deepcopy(dictGraph[nameLayer])
             dictGraph[nameLayer] = []
@@ -464,12 +468,13 @@ class _net:
       nameThis = path[number]
       nameNext = path[number + 1]
       dictGraph[nameThis].remove(nameNext)
-      # TODO: extract position in the dictGraph[nameThis]
+      # TODO extract position in the dictGraph[nameThis]
       if nameThis not in dictPath:
         dictPath[nameThis] = [nameNext]
       else:
         dictPath[nameThis].append(nameNext)
     dictGraph, listIsolated, dictPath = self.getDeadEnd(dictGraph, dictPath)
+    # TODO compare dictPath with dictGraph to get stacking positions and dimensions of layers
     dictReversed = self.computeReversedGraphAlone(dictGraph)
     # modify layers' dimension
     for nameThis in dictPath:
@@ -491,13 +496,11 @@ class _net:
             dimensionNext[0] -= dimensionThis[1]
     # trim layer information
     self.dictGraph = copy.deepcopy(dictGraph)
-    self.dictGraphReversed = copy.deepcopy(dictReversed)
     for nameIsolated in listIsolated:
       del self.dictGraph[nameIsolated]
-      del self.dictGraphReversed[nameIsolated]
       del self.dictLayer[nameIsolated]
       self.listNameLayer.remove(nameIsolated)
-    print ('path removal is valid:', self.isValidGraph())
+    print ('path removal is valid:', self.validateGraph())
     return True
 
   def actionRemove(self, positionStart, positionEnd, lengthPath):
@@ -505,12 +508,11 @@ class _net:
     print ('#############')
     print ('ACTION REMOVE')
     print ('#############')
-    # TODO: implement also recurrent connection
+    # TODO implement recurrent connection
     if positionStart > positionEnd:
       return False
     nameLayerStart = self.getLayerName(positionStart)
     nameLayerEnd = self.getLayerName(positionEnd)
-    # TODO: parallel layer not allowed
     if nameLayerStart == nameLayerEnd:
       return False
     # pre-requisite for more than 1 distinct path
@@ -549,7 +551,7 @@ dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': lay
 dictGraph = {'input1': ['layer1'], 'input2': ['layer5'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
 
 mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictGraph)
-print ('\n@@@ graph is valid:', mk1.isValidGraph(), '@@@')
+print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
 
 while True:
   countAdd = 0
@@ -577,7 +579,7 @@ while True:
     numFilter = tensorAction[6]
     sizeLinear = tensorAction[7]
     mk1.actionAdd(positionStartAdd, positionEndAdd, sizeFilter, numFilter, sizeLinear)
-    print ('\n@@@ graph is valid:', mk1.isValidGraph(), '@@@')
+    print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
   elif actionRemove > actionAdd and actionRemove > actionRead:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
