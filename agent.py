@@ -21,6 +21,11 @@ class _layer:
       self.dimensionOutputResult = dimension
     elif _type == 'Output':
       self.dimensionInputResult = dimension
+    if _type == 'Input' or _type == 'Output':
+      if len(dimension) == 1: # only out_features is defined
+        self.dimension = [0, dimension[0]]
+      elif len(dimension) == 3: # only out_channels is defined
+        self.dimension = [0, dimension[2], 0, 0, 0]
 
 class _net:
   name = ''
@@ -80,7 +85,7 @@ class _net:
     for nameLayer in self.listNameLayer:
       if not self.hasValidConnection(nameLayer):
         self.exitGateway(6)
-    print ('\n@@@ all connection are validation @@@')
+    print ('\n@@@ all connection are valid @@@')
     return True
 
   def computeReversedGraph(self):
@@ -207,9 +212,10 @@ class _net:
     return self.validateDimension()
 
   def getLayerName(self, positionLayer):
-    numberLayer = len(self.listNameLayer)
+    listLayer = self.listNameInput + self.listNameLayer
+    numberLayer = len(listLayer)
     indexLayer = min(int(positionLayer * numberLayer), numberLayer - 1)
-    return self.listNameLayer[indexLayer]
+    return listLayer[indexLayer]
 
   def getLayerDimensionC2C(self, dimensionInput, dimensionOutput, numFilter, sizeFilter):
     sizeInput = dimensionInput[0]
@@ -322,7 +328,6 @@ class _net:
     # TODO implement recurrent connection
     if positionStart > positionEnd:
       return False
-    # TODO include 'input' layer
     nameLayerStart = self.getLayerName(positionStart)
     nameLayerEnd = self.getLayerName(positionEnd)
     # TODO allow adding parallel layer
@@ -334,23 +339,30 @@ class _net:
     dimensionOutput = layerEnd.dimensionInputResult
     typeLayer = ''
     dimensionLayer = []
+    if layerStart._type == 'Input' and len(dimensionInput) == 1 and layerEnd._type == 'Conv2d':
+      return False
+    if layerEnd._type == 'Input':
+      return False
     if layerStart._type == 'Linear' and layerEnd._type == 'Conv2d':
       return False
-    if layerStart._type == 'Conv2d' and layerEnd._type == 'Conv2d':
+    if ((layerStart._type == 'Input' and len(dimensionInput) == 3) or layerStart._type == 'Conv2d') and layerEnd._type == 'Conv2d':
       if dimensionInput[0] < dimensionOutput[0]:
         return False
+      print ()
       print ('################')
       print ('Conv2d to Conv2d')
       print ('################')
       typeLayer = 'Conv2d'
       dimensionLayer = self.getLayerDimensionC2C(dimensionInput, dimensionOutput, numFilter, sizeFilter)
-    elif layerStart._type == 'Conv2d' and layerEnd._type == 'Linear':
+    elif ((layerStart._type == 'Input' and len(dimensionInput) == 3) or layerStart._type == 'Conv2d') and layerEnd._type == 'Linear':
+      print ()
       print ('################')
       print ('Conv2d to Linear')
       print ('################')
       typeLayer = 'Conv2d'
       dimensionLayer = self.getLayerDimensionC2L(dimensionInput, dimensionOutput, sizeLinear)
-    elif layerStart._type == 'Linear' and layerEnd._type == 'Linear':
+    elif ((layerStart._type == 'Input' and len(dimensionInput) == 1) or layerStart._type == 'Linear') and layerEnd._type == 'Linear':
+      print ()
       print ('################')
       print ('Linear to Linear')
       print ('################')
@@ -391,7 +403,7 @@ class _net:
   def filterPath(self, listPath):
     # filter listPath which contains layer(s) of I/O's only path
     listNameLayer = []
-    for nameInput in listNameInput:
+    for nameInput in self.listNameInput:
       listNext = self.dictGraph[nameInput]
       while len(listNext) == 1:
         nameNext = listNext[0]
@@ -399,7 +411,7 @@ class _net:
           break
         listNameLayer.append(nameNext)
         listNext = self.dictGraph[nameNext]
-    for nameOutput in listNameOutput:
+    for nameOutput in self.listNameOutput:
       listPrevious = self.dictGraphReversed[nameOutput]
       while len(listPrevious) == 1:
         namePrevious = listPrevious[0]
@@ -490,9 +502,9 @@ class _net:
         if typeNext == 'Conv2d':
           dimensionNext[0] -= dimensionThis[1]
         elif typeNext == 'Linear':
-          if typeThis == 'Conv2d':
+          if typeThis == 'Conv2d' or (typeThis == 'Input' and len(outputThis) == 3):
             dimensionNext[0] -= outputThis[0] * outputThis[1] * outputThis[2]
-          elif typeThis == 'Linear':
+          elif typeThis == 'Linear' or (typeThis == 'Input' and len(outputThis) == 1):
             dimensionNext[0] -= dimensionThis[1]
     # trim layer information
     self.dictGraph = copy.deepcopy(dictGraph)
@@ -500,7 +512,7 @@ class _net:
       del self.dictGraph[nameIsolated]
       del self.dictLayer[nameIsolated]
       self.listNameLayer.remove(nameIsolated)
-    print ('path removal is valid:', self.validateGraph())
+    print ('\npath removal is valid:', self.validateGraph())
     return True
 
   def actionRemove(self, positionStart, positionEnd, lengthPath):
@@ -514,6 +526,8 @@ class _net:
     nameLayerStart = self.getLayerName(positionStart)
     nameLayerEnd = self.getLayerName(positionEnd)
     if nameLayerStart == nameLayerEnd:
+      return False
+    if 'input' in nameLayerEnd:
       return False
     # pre-requisite for more than 1 distinct path
     if not (len(self.dictGraph[nameLayerStart]) > 1 and len(self.dictGraphReversed[nameLayerEnd]) > 1):
