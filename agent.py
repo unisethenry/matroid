@@ -369,6 +369,7 @@ class _net:
       typeLayer = 'Linear'
       dimensionLayer = self.getLayerDimensionL2L(dimensionInput, dimensionOutput, sizeLinear)
     self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
+    print ('\n@@@ graph is valid:', self.validateGraph(), '@@@')
     historyAction.append('Add')
     return True
 
@@ -512,7 +513,6 @@ class _net:
       del self.dictGraph[nameIsolated]
       del self.dictLayer[nameIsolated]
       self.listNameLayer.remove(nameIsolated)
-    print ('\npath removal is valid:', self.validateGraph())
     return True
 
   def actionRemove(self, positionStart, positionEnd, lengthPath):
@@ -545,8 +545,65 @@ class _net:
     pathRemove = listPathValid[indexPath]
     pathRemove = [nameLayerStart] + pathRemove
     self.removePath(pathRemove)
+    print ('\n@@@ graph is valid:', self.validateGraph(), '@@@')
     historyAction.append('Remove')
     return True
+
+  def createPytorchScript(self):
+    self.computeReversedGraph()
+    self.computeLayerPrecedence()
+    scriptLibary = 'import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\n'
+    scriptClass = '\nclass _net(nn.Module):'
+    # initialize
+    scriptInit = '\n  def __init__(self):\n    super(_net, self).__init__()'
+    for nameLayer in self.listNameLayer:
+      layer = self.dictLayer[nameLayer]
+      scriptInit += '\n    self.' + layer.name + ' = nn.' + layer._type
+      scriptDimension = ''
+      for dimension in layer.dimension:
+        scriptDimension += ', ' + str(dimension)
+      scriptInit += '(' + scriptDimension[2:] + ')'
+    # inference
+    scriptForward = '\n\n  def forward(self'
+    for nameInput in self.listNameInput:
+      scriptForward += ', ' + nameInput
+    scriptForward += '):'
+    for nameLayer in self.listNameLayer:
+      typeLayer = self.dictLayer[nameLayer]._type
+      listNameSource = self.dictGraphReversed[nameLayer]
+      strInput = ''
+      for nameSource in listNameSource:
+        dimensionOutput = self.dictLayer[nameSource].dimensionOutputResult
+        strInput += ', '
+        if len(dimensionOutput) == 3 and typeLayer == 'Linear':
+          dimensionResult = dimensionOutput[0] * dimensionOutput[1] * dimensionOutput[2]
+          if 'input' not in nameSource:
+            strInput += 'output_'
+          strInput += nameSource + '.view(-1, ' + str(dimensionResult) + ')'
+        else:
+          if 'input' not in nameSource:
+            strInput += 'output_'
+          strInput += nameSource
+      strInput = strInput[2:]
+      if len(listNameSource) > 1:
+        strInput = 'torch.cat([' + strInput + '], 1)'
+      scriptForward += '\n    output_' + nameLayer + ' = '
+      if typeLayer == 'Conv2d':
+        scriptForward += 'F.relu(self.'
+      elif typeLayer == 'Linear':
+        scriptForward += 'torch.sigmoid(self.'
+      scriptForward += nameLayer + '(' + strInput + '))'
+    scriptOutput = ''
+    for nameOutput in self.listNameOutput:
+      scriptOutput += '\n    ' + nameOutput + ' = output_' + self.dictGraphReversed[nameOutput][0]
+    scriptForward += scriptOutput
+    # return
+    scriptReturn = ''
+    for nameOutput in self.listNameOutput:
+      scriptReturn += ', ' + nameOutput
+    scriptReturn = '\n    return ' + scriptReturn[2:]
+    script = scriptLibary + scriptClass + scriptInit + scriptForward + scriptReturn
+    return script
 
 input1 = _layer('input1', 'Input', [120, 120, 3])
 input2 = _layer('input2', 'Input', [32])
@@ -568,6 +625,10 @@ mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictG
 print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
 
 while True:
+  print ()
+  print ('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
+  print ('@@@@@@@@@@ Next Cycle @@@@@@@@@@')
+  print ('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
   countAdd = 0
   countRemove = 0
   for counter in range(len(historyAction)):
@@ -575,17 +636,16 @@ while True:
       countAdd += 1
     elif historyAction[counter] == 'Remove':
       countRemove += 1
-  print ('\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n')
   print ('Add:', countAdd, 'Remove:', countRemove)
   # action
   tensorAction = []
   for counter in range(16):
     tensorAction.append(random.random())
-
   actionAdd = tensorAction[0]
   actionRemove = tensorAction[1]
   actionRead = tensorAction[2]
-
+  if actionRead > actionAdd and actionRead > actionRemove:
+    continue
   if actionAdd > actionRemove and actionAdd > actionRead:
     positionStartAdd = tensorAction[3]
     positionEndAdd = tensorAction[4]
@@ -593,11 +653,9 @@ while True:
     numFilter = tensorAction[6]
     sizeLinear = tensorAction[7]
     mk1.actionAdd(positionStartAdd, positionEndAdd, sizeFilter, numFilter, sizeLinear)
-    print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
   elif actionRemove > actionAdd and actionRemove > actionRead:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
     lengthPathRemove = tensorAction[10]
     mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
-  elif actionRead > actionAdd and actionRead > actionRemove:
-    continue
+  script = mk1.createPytorchScript()
