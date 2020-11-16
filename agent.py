@@ -1,5 +1,8 @@
 import copy
 import random
+import imp
+import torch
+import numpy as np
 
 historyAction = []
 
@@ -306,6 +309,7 @@ class _net:
     self.dictGraph[nameLayerStart].append(nameLayer)
     self.dictGraph[nameLayer] = [nameLayerEnd]
     self.computeLayerPrecedence()
+    dimensionExtra = [copy.deepcopy(layerEnd.dimension[0])]
     if typeLayer == 'Conv2d':
       if layerEnd._type == 'Conv2d':
         layerEnd.dimension[0] += dimensionLayer[1]
@@ -319,6 +323,8 @@ class _net:
         layerEnd.dimension[0] += widthOutput * heightOutput * depthOutput
     elif typeLayer == 'Linear':
       layerEnd.dimension[0] += dimensionLayer[1]
+    dimensionExtra.append(copy.deepcopy(layerEnd.dimension[0]) - 1)
+    return dimensionExtra
 
   def actionAdd(self, positionStart, positionEnd, sizeFilter, numFilter, sizeLinear):
     print ()
@@ -327,12 +333,12 @@ class _net:
     print ('##########')
     # TODO implement recurrent connection
     if positionStart > positionEnd:
-      return False
+      return False, {}
     nameLayerStart = self.getLayerName(positionStart)
     nameLayerEnd = self.getLayerName(positionEnd)
     # TODO allow adding parallel layer
     if nameLayerStart == nameLayerEnd:
-      return False
+      return False, {}
     layerStart = self.dictLayer[nameLayerStart]
     layerEnd = self.dictLayer[nameLayerEnd]
     dimensionInput = layerStart.dimensionOutputResult
@@ -340,14 +346,14 @@ class _net:
     typeLayer = ''
     dimensionLayer = []
     if layerStart._type == 'Input' and len(dimensionInput) == 1 and layerEnd._type == 'Conv2d':
-      return False
+      return False, {}
     if layerEnd._type == 'Input':
-      return False
+      return False, {}
     if layerStart._type == 'Linear' and layerEnd._type == 'Conv2d':
-      return False
+      return False, {}
     if ((layerStart._type == 'Input' and len(dimensionInput) == 3) or layerStart._type == 'Conv2d') and layerEnd._type == 'Conv2d':
       if dimensionInput[0] < dimensionOutput[0]:
-        return False
+        return False, {}
       print ()
       print ('################')
       print ('Conv2d to Conv2d')
@@ -368,10 +374,10 @@ class _net:
       print ('################')
       typeLayer = 'Linear'
       dimensionLayer = self.getLayerDimensionL2L(dimensionInput, dimensionOutput, sizeLinear)
-    self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
+    dimensionExtra = self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
     print ('\n@@@ graph is valid:', self.validateGraph(), '@@@')
     historyAction.append('Add')
-    return True
+    return True, { nameLayerEnd: dimensionExtra }
 
   def getPath(self, nameLayerStart, nameLayerEnd):
     # get all path originates from nameLayerStart and ends at nameLayerEnd
@@ -623,6 +629,14 @@ dictGraph = {'input1': ['layer1'], 'input2': ['layer5'], 'layer1': ['layer2'], '
 
 mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictGraph)
 print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
+script = mk1.createPytorchScript()
+fileScript = open("net.py", "w")
+fileScript.write(script)
+fileScript.close()
+import net
+imp.reload(net)
+modelNow = net._net()
+modelNow.cuda()
 
 while True:
   print ()
@@ -644,6 +658,8 @@ while True:
   actionAdd = tensorAction[0]
   actionRemove = tensorAction[1]
   actionRead = tensorAction[2]
+  isValidAction = False
+  dictDiffLayer = {}
   if actionRead > actionAdd and actionRead > actionRemove:
     continue
   if actionAdd > actionRemove and actionAdd > actionRead:
@@ -652,10 +668,45 @@ while True:
     sizeFilter = tensorAction[5]
     numFilter = tensorAction[6]
     sizeLinear = tensorAction[7]
-    mk1.actionAdd(positionStartAdd, positionEndAdd, sizeFilter, numFilter, sizeLinear)
+    isValidAction, dictDiffLayer = mk1.actionAdd(positionStartAdd, positionEndAdd, sizeFilter, numFilter, sizeLinear)
   elif actionRemove > actionAdd and actionRemove > actionRead:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
     lengthPathRemove = tensorAction[10]
-    mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
-  script = mk1.createPytorchScript()
+    isValidAction = mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
+  torch.set_printoptions(profile="full")
+  if isValidAction:
+    modelOld = modelNow
+    input1 = torch.rand(1, 3, 120, 120).cuda()
+    input2 = torch.rand(1, 32).cuda()
+    outputOld = modelOld(input1, input2).cpu().data.numpy()
+    script = mk1.createPytorchScript()
+    fileScript = open("net.py", "w")
+    fileScript.write(script)
+    fileScript.close()
+    import net
+    imp.reload(net)
+    modelNow = net._net()
+    if actionAdd > actionRemove and actionAdd > actionRead:
+      stateDict = modelNow.state_dict()
+      for key in modelOld.state_dict():
+        nameLayer = key.split('.')[0]
+        if 'weight' in key and nameLayer in dictDiffLayer:
+          paraOld = modelOld.state_dict()[key].cpu().data.numpy()
+          paraNow = modelNow.state_dict()[key].cpu().data.numpy()
+          # TODO: initialize with small values instead of zeros
+          paraNow = np.zeros(paraNow.shape)
+          typeLayer = mk1.dictLayer[nameLayer]._type
+          if typeLayer == 'Conv2d':
+            paraNow[:, : dictDiffLayer[nameLayer][0], :, :] = paraOld
+          elif typeLayer == 'Linear':
+            paraNow[:, : dictDiffLayer[nameLayer][0]] = paraOld
+          stateDict[key] = torch.tensor(paraNow)
+        else:
+          stateDict[key] = modelOld.state_dict()[key]
+      modelNow.load_state_dict(stateDict)
+    #elif actionRemove > actionAdd and actionRemove > actionRead:
+    modelNow.cuda()
+    outputNew = modelNow(input1, input2).cpu().data.numpy()
+    if (outputOld == outputNew).all():
+      print ('\n@@@ models\' outputs are equivalent @@@')
