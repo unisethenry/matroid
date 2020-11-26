@@ -377,7 +377,7 @@ class _net:
     dimensionExtra = self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
     print ('\n@@@ graph is valid:', self.validateGraph(), '@@@')
     historyAction.append('Add')
-    return True, { nameLayerEnd: dimensionExtra }
+    return True, { nameLayerEnd: [dimensionExtra] }
 
   def getPath(self, nameLayerStart, nameLayerEnd):
     # get all path originates from nameLayerStart and ends at nameLayerEnd
@@ -493,8 +493,71 @@ class _net:
       else:
         dictPath[nameThis].append(nameNext)
     dictGraph, listIsolated, dictPath = self.getDeadEnd(dictGraph, dictPath)
-    # TODO compare dictPath with dictGraph to get stacking positions and dimensions of layers
-    dictReversed = self.computeReversedGraphAlone(dictGraph)
+    # dictReversed = self.computeReversedGraphAlone(dictGraph)
+
+    # obtain layers' begining positions and dimensions for removal
+    dictPathTrimed = {}
+    for nameThis in dictPath:
+      layerThis = self.dictLayer[nameThis]
+      typeThis = layerThis._type
+      dimensionThis = layerThis.dimension
+      outputThis = layerThis.dimensionOutputResult
+      listNext = dictPath[nameThis]
+      for nameNext in listNext:
+        if nameNext not in listIsolated:
+          layerNext = self.dictLayer[nameNext]
+          typeNext = layerNext._type
+          dimensionNext = layerNext.dimension
+          if nameNext not in dictPathTrimed:
+            dictPathTrimed[nameNext] = []
+          # begining position for removal
+          dimensionStart = 0
+          for namePast in self.dictGraphReversed[nameNext]:
+            if namePast == nameThis:
+              break
+            else:
+              layerPast = self.dictLayer[namePast]
+              typePast = layerPast._type
+              dimensionPast = layerPast.dimension
+              outputPast = layerPast.dimensionOutputResult
+              if typeNext == 'Conv2d':
+                dimensionStart += dimensionPast[1]
+              elif typeNext == 'Linear':
+                if typePast == 'Conv2d' or (typePast == 'Input' and len(outputPast) == 3):
+                  dimensionStart += outputPast[0] * outputPast[1] * outputPast[2]
+                elif typePast == 'Linear' or (typePast == 'Input' and len(outputPast) == 1):
+                  dimensionStart += dimensionPast[1]
+          # dimension for removal
+          dimensionTrimed = 0
+          if typeNext == 'Conv2d':
+            dimensionTrimed = dimensionThis[1]
+          elif typeNext == 'Linear':
+            if typeThis == 'Conv2d' or (typeThis == 'Input' and len(outputThis) == 3):
+              dimensionTrimed = outputThis[0] * outputThis[1] * outputThis[2]
+            elif typeThis == 'Linear' or (typeThis == 'Input' and len(outputThis) == 1):
+              dimensionTrimed = dimensionThis[1]
+          listDimensionTrimed = [dimensionStart, dimensionStart + dimensionTrimed]
+          dictPathTrimed[nameNext].append(listDimensionTrimed)
+    # sort and merge trimed path's dimension
+    print (dictPathTrimed)
+    for nameThis in dictPathTrimed:
+      dictPathTrimed[nameThis].sort(key = lambda item : item[0])
+      pathAll = []
+      for pathTrimed in dictPathTrimed[nameThis]:
+        for position in pathTrimed:
+          if len(pathAll) > 0:
+            if pathAll[-1] != position:
+              pathAll.append(position)
+            else:
+              pathAll.pop()
+          else:
+            pathAll.append(position)
+      dictPathTrimed[nameThis] = []
+      for counter in range(len(pathAll)):
+        if counter % 2 == 1:
+          dictPathTrimed[nameThis].append([pathAll[counter - 1], pathAll[counter]])
+    print (dictPathTrimed)
+
     # modify layers' dimension
     for nameThis in dictPath:
       layerThis = self.dictLayer[nameThis]
@@ -519,7 +582,8 @@ class _net:
       del self.dictGraph[nameIsolated]
       del self.dictLayer[nameIsolated]
       self.listNameLayer.remove(nameIsolated)
-    return True
+      dictPathTrimed[nameIsolated] = []
+    return dictPathTrimed
 
   def actionRemove(self, positionStart, positionEnd, lengthPath):
     print ()
@@ -528,32 +592,32 @@ class _net:
     print ('#############')
     # TODO implement recurrent connection
     if positionStart > positionEnd:
-      return False
+      return False, {}
     nameLayerStart = self.getLayerName(positionStart)
     nameLayerEnd = self.getLayerName(positionEnd)
     if nameLayerStart == nameLayerEnd:
-      return False
+      return False, {}
     if 'input' in nameLayerEnd:
-      return False
+      return False, {}
     # pre-requisite for more than 1 distinct path
     if not (len(self.dictGraph[nameLayerStart]) > 1 and len(self.dictGraphReversed[nameLayerEnd]) > 1):
-      return False
+      return False, {}
     dictPath = self.getPath(nameLayerStart, nameLayerEnd)
     # there are less than 2 distinct paths
     if len(dictPath) < 2:
-      return False
+      return False, {}
     listPath = self.flattenPath(dictPath)
     listPathValid = self.filterPath(listPath)
     if len(listPathValid) == 0:
-      return False
-    listPathValid = sorted(listPathValid, key = len)
+      return False, {}
+    listPathValid.sort(key = len)
     indexPath = min(int(lengthPath * len(listPathValid)), len(listPathValid) - 1)
     pathRemove = listPathValid[indexPath]
     pathRemove = [nameLayerStart] + pathRemove
-    self.removePath(pathRemove)
+    dictPathTrimed = self.removePath(pathRemove)
     print ('\n@@@ graph is valid:', self.validateGraph(), '@@@')
     historyAction.append('Remove')
-    return True
+    return True, dictPathTrimed
 
   def createPytorchScript(self):
     self.computeReversedGraph()
@@ -636,8 +700,8 @@ fileScript.close()
 import net
 imp.reload(net)
 modelNow = net._net()
-modelNow.cuda()
 
+countNotEqual = 0
 while True:
   print ()
   print ('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
@@ -650,7 +714,7 @@ while True:
       countAdd += 1
     elif historyAction[counter] == 'Remove':
       countRemove += 1
-  print ('Add:', countAdd, 'Remove:', countRemove)
+  print ('Add:', countAdd, 'Remove:', countRemove, 'Not Equal:', countNotEqual)
   # action
   tensorAction = []
   for counter in range(16):
@@ -673,13 +737,9 @@ while True:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
     lengthPathRemove = tensorAction[10]
-    isValidAction = mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
-  torch.set_printoptions(profile="full")
+    isValidAction, dictDiffLayer = mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
   if isValidAction:
     modelOld = modelNow
-    input1 = torch.rand(1, 3, 120, 120).cuda()
-    input2 = torch.rand(1, 32).cuda()
-    outputOld = modelOld(input1, input2).cpu().data.numpy()
     script = mk1.createPytorchScript()
     fileScript = open("net.py", "w")
     fileScript.write(script)
@@ -698,15 +758,128 @@ while True:
           paraNow = np.zeros(paraNow.shape)
           typeLayer = mk1.dictLayer[nameLayer]._type
           if typeLayer == 'Conv2d':
-            paraNow[:, : dictDiffLayer[nameLayer][0], :, :] = paraOld
+            paraNow[:, : dictDiffLayer[nameLayer][0][0], :, :] = paraOld
           elif typeLayer == 'Linear':
-            paraNow[:, : dictDiffLayer[nameLayer][0]] = paraOld
-          stateDict[key] = torch.tensor(paraNow)
+            paraNow[:, : dictDiffLayer[nameLayer][0][0]] = paraOld
+          stateDict[key] = torch.tensor(paraNow).cuda()
         else:
           stateDict[key] = modelOld.state_dict()[key]
       modelNow.load_state_dict(stateDict)
-    #elif actionRemove > actionAdd and actionRemove > actionRead:
+    elif actionRemove > actionAdd and actionRemove > actionRead:
+      print ('\n')
+      print (dictDiffLayer)
+      stateDictNow = modelNow.state_dict()
+      stateDictOld = modelOld.state_dict()
+      for key in modelOld.state_dict():
+        nameLayer = key.split('.')[0]
+        if nameLayer in dictDiffLayer:
+          if len(dictDiffLayer[nameLayer]) == 0:
+            paraOld = modelOld.state_dict()[key].cpu().data.numpy()
+            paraZeros = np.zeros(paraOld.shape)
+            stateDictOld[key] = torch.tensor(paraZeros).cuda()
+          elif 'weight' in key and len(dictDiffLayer[nameLayer]) > 0:
+            dimensionTrimed = dictDiffLayer[nameLayer]
+            typeLayer = mk1.dictLayer[nameLayer]._type
+            paraOld = modelOld.state_dict()[key].cpu().data.numpy()
+            paraNow = modelNow.state_dict()[key].cpu().data.numpy()
+            for pathTrimed in dimensionTrimed:
+              # TODO: gradually replace parameters with zeros
+              paraZeros = np.zeros(paraOld.shape)
+              if typeLayer == 'Conv2d':
+                paraOld[:, pathTrimed[0] : pathTrimed[1], :, :] = paraZeros[:, pathTrimed[0] : pathTrimed[1], :, :]
+              elif typeLayer == 'Linear':
+                paraOld[:, pathTrimed[0] : pathTrimed[1]] = paraZeros[:, pathTrimed[0] : pathTrimed[1]]
+              stateDictOld[key] = torch.tensor(paraOld).cuda()
+            print ('\n@@@@@@@@@@@@@@@\nlayer:', nameLayer)
+            print ('\ndimension Trimed:', dimensionTrimed)
+            print ('\nold dimension:', paraOld.shape)
+            print ('now dimension:', paraNow.shape)
+            startOld = 0
+            endOld = 0
+            startNow = 0
+            endNow = 0
+            for interval in range(len(dimensionTrimed) + 1):
+              print ('\ninterval:', interval)
+              if interval == 0:
+                if dimensionTrimed[0][0] != 0:
+                  startOld = 0
+                  endOld = dimensionTrimed[0][0]
+                  startNow = 0
+                  endNow = dimensionTrimed[0][0]
+                  print ('a')
+                  print ('old:', 0, dimensionTrimed[0][0])
+                  print ('now:', 0, dimensionTrimed[0][0])
+                else:
+                  continue
+              elif interval == len(dimensionTrimed):
+                if dimensionTrimed[interval - 1][1] != paraOld.shape[1]:
+                  startOld = dimensionTrimed[len(dimensionTrimed) - 1][1]
+                  endOld = paraOld.shape[1]
+                  startNow = endNow
+                  endNow = paraNow.shape[1]
+                  print ('b')
+                  print ('old:', dimensionTrimed[len(dimensionTrimed) - 1][1], paraOld.shape[1])
+                  print ('now:', startNow, paraNow.shape[1])
+                else:
+                  continue
+              else:
+                if True:#dimensionTrimed[interval - 1][1] != dimensionTrimed[interval][0]:
+                  startOld = dimensionTrimed[interval - 1][1]
+                  endOld = dimensionTrimed[interval][0]
+                  startNow = endNow
+                  endNow = startNow + dimensionTrimed[interval][0] - dimensionTrimed[interval - 1][1]
+                  print ('c')
+                  print ('old:', dimensionTrimed[interval - 1][1], dimensionTrimed[interval][0])
+                  print ('now:', startNow, startNow + dimensionTrimed[interval][0] - dimensionTrimed[interval - 1][1])
+                else:
+                  continue
+              if typeLayer == 'Conv2d':
+                paraNow[:, startNow : endNow, :, :] = paraOld[:, startOld : endOld, :, :]
+              elif typeLayer == 'Linear':
+                paraNow[:, startNow : endNow] = paraOld[:, startOld : endOld]
+              stateDictNow[key] = torch.tensor(paraNow).cuda()
+        else:
+          stateDictNow[key] = modelOld.state_dict()[key]
+      modelOld.load_state_dict(stateDictOld)
+      modelNow.load_state_dict(stateDictNow)
+    # testing output for both models
+    modelOld.cuda()
     modelNow.cuda()
+    input1 = torch.rand(1, 3, 120, 120).cuda()
+    input2 = torch.rand(1, 32).cuda()
+    outputOld = modelOld(input1, input2).cpu().data.numpy()
     outputNew = modelNow(input1, input2).cpu().data.numpy()
     if (outputOld == outputNew).all():
       print ('\n@@@ models\' outputs are equivalent @@@')
+    else:
+      print ('\n@@@ models\' outputs are not equal @@@')
+      #if actionRemove > actionAdd:
+      if True:
+        countNotEqual += 1
+        print (outputOld)
+        print (outputNew)
+        counter = 0
+        for count in range(len(outputOld[0])):
+          if outputOld[0][count] != outputNew[0][count]:
+            counter += 1
+            print (count, outputOld[0][count] - outputNew[0][count])
+        print (counter)
+    # after training (fill all zeros with small values)
+    stateDictNow = modelNow.state_dict()
+    for key in modelNow.state_dict():
+      nameLayer = key.split('.')[0]
+      if 'weight' in key and nameLayer in dictDiffLayer:
+        paraNow = modelNow.state_dict()[key].cpu().data.numpy()
+        bound = 1.0
+        if mk1.dictLayer[nameLayer]._type == 'Conv2d':
+          bound = 1.0 / ((paraNow.shape[1] * paraNow.shape[2] * paraNow.shape[3]) ** 0.5)
+        elif mk1.dictLayer[nameLayer]._type == 'Linear':
+          bound = 1.0 / (paraNow.shape[1] ** 0.5)
+        paraInit = np.random.uniform(-bound, bound, paraNow.shape)
+        for pathInit in dictDiffLayer[nameLayer]:
+          if mk1.dictLayer[nameLayer]._type == 'Conv2d':
+            paraNow[:, pathInit[0] : pathInit[1], :, :] = paraInit[:, pathInit[0] : pathInit[1], :, :]
+          elif mk1.dictLayer[nameLayer]._type == 'Linear':
+            paraNow[:, pathInit[0] : pathInit[1]] = paraInit[:, pathInit[0] : pathInit[1]]
+        stateDictNow[key] = torch.tensor(paraNow).cuda()
+      modelNow.load_state_dict(stateDictNow)
