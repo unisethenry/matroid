@@ -1,14 +1,14 @@
+import os
 import imp
 import copy
 import torch
 import random
 import numpy as np
 
-historyAction = []
-
 class _layer:
   name = ''
   _type = ''
+  birthday = 0
   dimension = []
   dictDimensionInput = {}
   dimensionInputResult = []
@@ -18,7 +18,7 @@ class _layer:
     self.name = name
     self._type = _type
     self.dimension = dimension
-    # conv2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
+    # Conv2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
     # Linear dimension: [in_features, out_features]
     if _type == 'Input':
       self.dimensionOutputResult = dimension
@@ -37,6 +37,7 @@ class _net:
   listNameLayer = []
   dictLayer = {}
   dictGraph = {}
+  birthdayLatest = 0
   # non-essential
   dictGraphReversed = {}
 
@@ -694,14 +695,16 @@ dictGraph = {'input1': ['layer1'], 'input2': ['layer5'], 'layer1': ['layer2'], '
 mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictGraph)
 print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
 script = mk1.createPytorchScript()
-fileScript = open("net.py", "w")
+fileScript = open('net.py', 'w')
 fileScript.write(script)
 fileScript.close()
 import net
 imp.reload(net)
 modelNew = net._net()
 
+historyAction = []
 countNotEqual = 0
+
 while True:
   print ()
   print ('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
@@ -724,6 +727,7 @@ while True:
   actionRead = tensorAction[2]
   isValidAction = False
   dictDiffLayer = {}
+  strAction = ''
   if actionRead > actionAdd and actionRead > actionRemove:
     continue
   if actionAdd > actionRemove and actionAdd > actionRead:
@@ -733,15 +737,34 @@ while True:
     numFilter = tensorAction[6]
     sizeLinear = tensorAction[7]
     isValidAction, dictDiffLayer = mk1.actionAdd(positionStartAdd, positionEndAdd, sizeFilter, numFilter, sizeLinear)
+    strAction += '\n\nADD\n' + str(dictDiffLayer)
   elif actionRemove > actionAdd and actionRemove > actionRead:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
     lengthPathRemove = tensorAction[10]
+    print (mk1.listNameLayer)
+    print ('\nold graph:\n', mk1.dictGraph)
+    print ('\nold reversed graph:\n', mk1.dictGraphReversed)
     isValidAction, dictDiffLayer = mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
+    strAction += '\n\nREMOVE\n' + str(dictDiffLayer)
+    if isValidAction:
+      print ('\nnew graph:\n', mk1.dictGraph)
+      print ('\nnew reversed graph:\n', mk1.dictGraphReversed)
+      print (mk1.listNameLayer)
+      for nameLayer in mk1.listNameLayer:
+        layerThis = mk1.dictLayer[nameLayer]
+        print ()
+        print (nameLayer)
+        print (layerThis.dimension)
+        print (layerThis.dimensionOutputResult)
   if isValidAction:
     modelOld = modelNew
     script = mk1.createPytorchScript()
-    fileScript = open("net.py", "w")
+    fileScript = open('net.py', 'a')
+    fileScript.write(strAction)
+    fileScript.close()
+    os.rename('net.py', 'netOld.py')
+    fileScript = open('net.py', 'w')
     fileScript.write(script)
     fileScript.close()
     import net
@@ -754,7 +777,7 @@ while True:
         if 'weight' in key and nameLayer in dictDiffLayer:
           paraOld = modelOld.state_dict()[key].cpu().data.numpy()
           paraNew = modelNew.state_dict()[key].cpu().data.numpy()
-          # TODO: initialize with small values instead of zeros
+          # TODO initialize with small values instead of zeros
           paraNew = np.zeros(paraNew.shape)
           typeLayer = mk1.dictLayer[nameLayer]._type
           if typeLayer == 'Conv2d':
@@ -783,7 +806,7 @@ while True:
             paraOld = modelOld.state_dict()[key].cpu().data.numpy()
             paraNew = modelNew.state_dict()[key].cpu().data.numpy()
             for pathTrimed in dimensionTrimed:
-              # TODO: gradually replace parameters with zeros
+              # TODO gradually replace parameters with zeros
               paraZeros = np.zeros(paraOld.shape)
               if typeLayer == 'Conv2d':
                 paraOld[:, pathTrimed[0] : pathTrimed[1], :, :] = paraZeros[:, pathTrimed[0] : pathTrimed[1], :, :]
@@ -854,8 +877,7 @@ while True:
       print ('\n@@@ models\' outputs are equivalent @@@')
     else:
       print ('\n@@@ models\' outputs are not equal @@@')
-      #if actionRemove > actionAdd:
-      if True:
+      if actionRemove > actionAdd:
         countNotEqual += 1
         print (outputOld)
         print (outputNew)
