@@ -14,10 +14,11 @@ class _layer:
   dimensionInputResult = []
   dimensionOutputResult = []
 
-  def __init__(self, name, _type, dimension):
+  def __init__(self, name, _type, dimension, birthday = 0):
     self.name = name
     self._type = _type
     self.dimension = dimension
+    self.birthday = birthday
     # Conv2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
     # Linear dimension: [in_features, out_features]
     if _type == 'Input':
@@ -304,7 +305,8 @@ class _net:
     nameLayerEnd = layerEnd.name
     dimensionInput = layerStart.dimensionOutputResult
     dimensionOutput = layerEnd.dimensionInputResult
-    layerNew = _layer(nameLayer, typeLayer, dimensionLayer)
+    layerNew = _layer(nameLayer, typeLayer, dimensionLayer, self.birthdayLatest + 1)
+    self.birthdayLatest += 1
     self.listNameLayer.append(nameLayer)
     self.dictLayer[nameLayer] = layerNew
     self.dictGraph[nameLayerStart].append(nameLayer)
@@ -495,9 +497,9 @@ class _net:
         dictPath[nameThis].append(nameNext)
     dictGraph, listIsolated, dictPath = self.getDeadEnd(dictGraph, dictPath)
     # dictReversed = self.computeReversedGraphAlone(dictGraph)
-
     # obtain layers' begining positions and dimensions for removal
     dictPathTrimed = {}
+    dictGraphReversedSorted = {}
     for nameThis in dictPath:
       layerThis = self.dictLayer[nameThis]
       typeThis = layerThis._type
@@ -513,7 +515,12 @@ class _net:
             dictPathTrimed[nameNext] = []
           # begining position for removal
           dimensionStart = 0
-          for namePast in self.dictGraphReversed[nameNext]:
+          # changing graph may affect the precedence of layers
+          if nameNext not in dictGraphReversedSorted:
+            listReversed = copy.deepcopy(self.dictGraphReversed[nameNext])
+            listReversed.sort(key = lambda item : self.dictLayer[item].birthday)
+            dictGraphReversedSorted[nameNext] = listReversed
+          for namePast in dictGraphReversedSorted[nameNext]:
             if namePast == nameThis:
               break
             else:
@@ -540,7 +547,6 @@ class _net:
           listDimensionTrimed = [dimensionStart, dimensionStart + dimensionTrimed]
           dictPathTrimed[nameNext].append(listDimensionTrimed)
     # sort and merge trimed path's dimension
-    print (dictPathTrimed)
     for nameThis in dictPathTrimed:
       dictPathTrimed[nameThis].sort(key = lambda item : item[0])
       pathAll = []
@@ -557,8 +563,6 @@ class _net:
       for counter in range(len(pathAll)):
         if counter % 2 == 1:
           dictPathTrimed[nameThis].append([pathAll[counter - 1], pathAll[counter]])
-    print (dictPathTrimed)
-
     # modify layers' dimension
     for nameThis in dictPath:
       layerThis = self.dictLayer[nameThis]
@@ -703,7 +707,8 @@ imp.reload(net)
 modelNew = net._net()
 
 historyAction = []
-countNotEqual = 0
+countAddNotEqual = 0
+countRemoveNotEqual = 0
 
 while True:
   print ()
@@ -717,7 +722,8 @@ while True:
       countAdd += 1
     elif historyAction[counter] == 'Remove':
       countRemove += 1
-  print ('Add:', countAdd, 'Remove:', countRemove, 'Not Equal:', countNotEqual)
+  print ('Add:', countAdd, ', Not Equal:', countAddNotEqual)
+  print ('Remove:', countRemove, ', Not Equal:', countRemoveNotEqual)
   # action
   tensorAction = []
   for counter in range(16):
@@ -737,26 +743,13 @@ while True:
     numFilter = tensorAction[6]
     sizeLinear = tensorAction[7]
     isValidAction, dictDiffLayer = mk1.actionAdd(positionStartAdd, positionEndAdd, sizeFilter, numFilter, sizeLinear)
-    strAction += '\n\nADD\n' + str(dictDiffLayer)
+    strAction += '\n\n#ADD\n#' + str(dictDiffLayer)
   elif actionRemove > actionAdd and actionRemove > actionRead:
     positionStartRemove = tensorAction[8]
     positionEndRemove = tensorAction[9]
     lengthPathRemove = tensorAction[10]
-    print (mk1.listNameLayer)
-    print ('\nold graph:\n', mk1.dictGraph)
-    print ('\nold reversed graph:\n', mk1.dictGraphReversed)
     isValidAction, dictDiffLayer = mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
-    strAction += '\n\nREMOVE\n' + str(dictDiffLayer)
-    if isValidAction:
-      print ('\nnew graph:\n', mk1.dictGraph)
-      print ('\nnew reversed graph:\n', mk1.dictGraphReversed)
-      print (mk1.listNameLayer)
-      for nameLayer in mk1.listNameLayer:
-        layerThis = mk1.dictLayer[nameLayer]
-        print ()
-        print (nameLayer)
-        print (layerThis.dimension)
-        print (layerThis.dimensionOutputResult)
+    strAction += '\n\n#REMOVE\n#' + str(dictDiffLayer)
   if isValidAction:
     modelOld = modelNew
     script = mk1.createPytorchScript()
@@ -770,6 +763,8 @@ while True:
     import net
     imp.reload(net)
     modelNew = net._net()
+    print ()
+    print (dictDiffLayer)
     if actionAdd > actionRemove and actionAdd > actionRead:
       stateDict = modelNew.state_dict()
       for key in modelOld.state_dict():
@@ -780,6 +775,7 @@ while True:
           # TODO initialize with small values instead of zeros
           paraNew = np.zeros(paraNew.shape)
           typeLayer = mk1.dictLayer[nameLayer]._type
+          # TODO assuming new layer appends at the end
           if typeLayer == 'Conv2d':
             paraNew[:, : dictDiffLayer[nameLayer][0][0], :, :] = paraOld
           elif typeLayer == 'Linear':
@@ -789,18 +785,12 @@ while True:
           stateDict[key] = modelOld.state_dict()[key]
       modelNew.load_state_dict(stateDict)
     elif actionRemove > actionAdd and actionRemove > actionRead:
-      print ('\n')
-      print (dictDiffLayer)
       stateDictNew = modelNew.state_dict()
       stateDictOld = modelOld.state_dict()
       for key in modelOld.state_dict():
         nameLayer = key.split('.')[0]
         if nameLayer in dictDiffLayer:
-          if len(dictDiffLayer[nameLayer]) == 0:
-            paraOld = modelOld.state_dict()[key].cpu().data.numpy()
-            paraZeros = np.zeros(paraOld.shape)
-            stateDictOld[key] = torch.tensor(paraZeros).cuda()
-          elif 'weight' in key and len(dictDiffLayer[nameLayer]) > 0:
+          if 'weight' in key and len(dictDiffLayer[nameLayer]) > 0:
             dimensionTrimed = dictDiffLayer[nameLayer]
             typeLayer = mk1.dictLayer[nameLayer]._type
             paraOld = modelOld.state_dict()[key].cpu().data.numpy()
@@ -813,25 +803,17 @@ while True:
               elif typeLayer == 'Linear':
                 paraOld[:, pathTrimed[0] : pathTrimed[1]] = paraZeros[:, pathTrimed[0] : pathTrimed[1]]
               stateDictOld[key] = torch.tensor(paraOld).cuda()
-            print ('\n@@@@@@@@@@@@@@@\nlayer:', nameLayer)
-            print ('\ndimension Trimed:', dimensionTrimed)
-            print ('\nold dimension:', paraOld.shape)
-            print ('now dimension:', paraNew.shape)
             startOld = 0
             endOld = 0
             startNew = 0
             endNew = 0
             for interval in range(len(dimensionTrimed) + 1):
-              print ('\ninterval:', interval)
               if interval == 0:
                 if dimensionTrimed[0][0] != 0:
                   startOld = 0
                   endOld = dimensionTrimed[0][0]
                   startNew = 0
                   endNew = dimensionTrimed[0][0]
-                  print ('a')
-                  print ('old:', 0, dimensionTrimed[0][0])
-                  print ('now:', 0, dimensionTrimed[0][0])
                 else:
                   continue
               elif interval == len(dimensionTrimed):
@@ -840,27 +822,20 @@ while True:
                   endOld = paraOld.shape[1]
                   startNew = endNew
                   endNew = paraNew.shape[1]
-                  print ('b')
-                  print ('old:', dimensionTrimed[len(dimensionTrimed) - 1][1], paraOld.shape[1])
-                  print ('now:', startNew, paraNew.shape[1])
                 else:
                   continue
               else:
-                if True:#dimensionTrimed[interval - 1][1] != dimensionTrimed[interval][0]:
-                  startOld = dimensionTrimed[interval - 1][1]
-                  endOld = dimensionTrimed[interval][0]
-                  startNew = endNew
-                  endNew = startNew + dimensionTrimed[interval][0] - dimensionTrimed[interval - 1][1]
-                  print ('c')
-                  print ('old:', dimensionTrimed[interval - 1][1], dimensionTrimed[interval][0])
-                  print ('now:', startNew, startNew + dimensionTrimed[interval][0] - dimensionTrimed[interval - 1][1])
-                else:
-                  continue
+                startOld = dimensionTrimed[interval - 1][1]
+                endOld = dimensionTrimed[interval][0]
+                startNew = endNew
+                endNew = startNew + dimensionTrimed[interval][0] - dimensionTrimed[interval - 1][1]
               if typeLayer == 'Conv2d':
                 paraNew[:, startNew : endNew, :, :] = paraOld[:, startOld : endOld, :, :]
               elif typeLayer == 'Linear':
                 paraNew[:, startNew : endNew] = paraOld[:, startOld : endOld]
               stateDictNew[key] = torch.tensor(paraNew).cuda()
+          elif 'bias' in key and len(dictDiffLayer[nameLayer]) > 0:
+            stateDictNew[key] = modelOld.state_dict()[key]
         else:
           stateDictNew[key] = modelOld.state_dict()[key]
       modelOld.load_state_dict(stateDictOld)
@@ -877,15 +852,19 @@ while True:
       print ('\n@@@ models\' outputs are equivalent @@@')
     else:
       print ('\n@@@ models\' outputs are not equal @@@')
-      if actionRemove > actionAdd:
-        countNotEqual += 1
+      if actionAdd > actionRemove:
+        countAddNotEqual += 1
+      elif actionRemove > actionAdd:
+        countRemoveNotEqual += 1
+      if (np.sum(np.abs(outputOld - outputNew)) / len(outputOld)) > 1e-14:
         print (outputOld)
         print (outputNew)
         counter = 0
         for count in range(len(outputOld[0])):
           if outputOld[0][count] != outputNew[0][count]:
+            print (count + 1, outputOld[0][count] - outputNew[0][count])
             counter += 1
-            print (count, outputOld[0][count] - outputNew[0][count])
+        print (np.sum(np.abs(outputOld - outputNew)) / len(outputOld))
         print (counter)
 
     # after training (fill all zeros with small values)
