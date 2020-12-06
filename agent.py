@@ -722,8 +722,8 @@ while True:
       countAdd += 1
     elif historyAction[counter] == 'Remove':
       countRemove += 1
-  print ('Add:', countAdd, ', Not Equal:', countAddNotEqual)
-  print ('Remove:', countRemove, ', Not Equal:', countRemoveNotEqual)
+  print ('Add:', countAdd, 'Not Equal:', countAddNotEqual)
+  print ('Remove:', countRemove, 'Not Equal:', countRemoveNotEqual)
   # action
   tensorAction = []
   for counter in range(16):
@@ -763,8 +763,7 @@ while True:
     import net
     imp.reload(net)
     modelNew = net._net()
-    print ()
-    print (dictDiffLayer)
+    print ('\ndiffLayer:', dictDiffLayer)
     if actionAdd > actionRemove and actionAdd > actionRead:
       stateDict = modelNew.state_dict()
       for key in modelOld.state_dict():
@@ -856,16 +855,16 @@ while True:
         countAddNotEqual += 1
       elif actionRemove > actionAdd:
         countRemoveNotEqual += 1
-      if (np.sum(np.abs(outputOld - outputNew)) / len(outputOld)) > 1e-14:
-        print (outputOld)
-        print (outputNew)
-        counter = 0
-        for count in range(len(outputOld[0])):
-          if outputOld[0][count] != outputNew[0][count]:
-            print (count + 1, outputOld[0][count] - outputNew[0][count])
-            counter += 1
-        print (np.sum(np.abs(outputOld - outputNew)) / len(outputOld))
-        print (counter)
+      print ()
+      print ('old network output:\n', outputOld)
+      print ('new network output:\n', outputNew)
+      counter = 0
+      for count in range(len(outputOld[0])):
+        if outputOld[0][count] != outputNew[0][count]:
+          print ('position:', count + 1, 'error:', np.abs(outputOld[0][count] - outputNew[0][count]))
+          counter += 1
+      print ('\ntotal number of error:', counter)
+      print ('\naverage error:', np.sum(np.abs(outputOld - outputNew)) / len(outputOld))
 
     # after training (fill all zeros with small values)
     stateDictNew = modelNew.state_dict()
