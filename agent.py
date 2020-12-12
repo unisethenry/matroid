@@ -14,13 +14,19 @@ class _layer:
   dimensionInputResult = []
   dimensionOutputResult = []
 
-  def __init__(self, name, _type, dimension, birthday = 0):
+  def __init__(self, name, _type, dimension, birthday = 0, dimensionInputResult = []):
     self.name = name
     self._type = _type
     self.dimension = dimension
     self.birthday = birthday
     # Conv2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
     # Linear dimension: [in_features, out_features]
+    # ConvTranspose2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
+    if _type == 'ConvTranspose2d':
+      if not dimensionInputResult or len(dimensionInputResult) != 3:
+        print ('\n\'ConvTranspose2d\' layer (' + name + ') must specify 3D input dimension!')
+        exit()
+      self.dimensionInputResult = dimensionInputResult
     if _type == 'Input':
       self.dimensionOutputResult = dimension
     elif _type == 'Output':
@@ -74,10 +80,13 @@ class _net:
         if not (typeLayerForward == 'Conv2d' or typeLayerForward == 'Linear' or typeLayerForward == 'Output'):
           self.exitGateway(1)
       elif typeLayer == 'Linear':
-        if not (typeLayerForward == 'Linear' or typeLayerForward == 'Output'):
+        if not (typeLayerForward == 'Linear' or typeLayerForward == 'ConvTranspose2d' or typeLayerForward == 'Output'):
           self.exitGateway(2)
+      elif typeLayer == 'ConvTranspose2d':
+        if not (typeLayerForward == 'ConvTranspose2d' or typeLayerForward == 'Output'):
+          self.exitGateway(16)
       elif typeLayer == 'Input':
-        if typeLayerForward == 'Output' or not (typeLayerForward == 'Conv2d' or typeLayerForward == 'Linear'):
+        if typeLayerForward == 'Output':
           self.exitGateway(3)
       else:
         self.exitGateway(4)
@@ -179,16 +188,34 @@ class _net:
               dimensionInputResult[0] += dimensionOutputLayerBackward[0] * dimensionOutputLayerBackward[1] * dimensionOutputLayerBackward[2]
             else:
               self.exitGateway(11)
-          elif layerBackward._type == 'Conv2d':
+          elif layerBackward._type == 'Conv2d' or layerBackward._type == 'ConvTranspose2d':
             dimensionInputResult[0] += dimensionOutputLayerBackward[0] * dimensionOutputLayerBackward[1] * dimensionOutputLayerBackward[2]
           elif layerBackward._type == 'Linear':
             dimensionInputResult[0] += dimensionOutputLayerBackward[0]
+        elif layer._type == 'ConvTranspose2d':
+          if not dimensionInputResult:
+            dimensionInputResult = copy.deepcopy(layer.dimensionInputResult)
+            dimensionInputResult[2] = 0
+          if len(dimensionOutputLayerBackward) == 3:
+            if dimensionInputResult[0] != dimensionOutputLayerBackward[0]:
+              self.exitGateway(17)
+            if dimensionInputResult[1] != dimensionOutputLayerBackward[1]:
+              self.exitGateway(18)
+            # expect 'Input'/'ConvTranspose2d' and stacking of out_channels
+            dimensionInputResult[2] += dimensionOutputLayerBackward[2]
+          else: # Linear / Input (1D)
+            if dimensionInputResult[0] * dimensionInputResult[1] > dimensionOutputLayerBackward[0]:
+              self.exitGateway(19)
+            depthInput = dimensionOutputLayerBackward[0] / (layer.dimensionInputResult[0] * layer.dimensionInputResult[1])
+            if not depthInput.is_integer():
+              self.exitGateway(20)
+            dimensionInputResult[2] += int(depthInput)
         self.dictLayer[nameLayer].dictDimensionInput = copy.deepcopy(dictDimensionInput)
         self.dictLayer[nameLayer].dimensionInputResult = copy.deepcopy(dimensionInputResult)
       ##################
       # output dimension
       ##################
-      if layer._type == 'Conv2d':
+      if layer._type == 'Conv2d' or layer._type == 'ConvTranspose2d':
         in_channels = layer.dimension[0]
         out_channels = layer.dimension[1]
         kernel_size = layer.dimension[2]
@@ -197,11 +224,15 @@ class _net:
         if in_channels != dimensionInputResult[2]:
           self.exitGateway(12)
         if kernel_size > dimensionInputResult[0] or kernel_size > dimensionInputResult[1]:
-          self.exitGateway(13)
+          if layer._type == 'Conv2d':
+            self.exitGateway(13)
         if stride > kernel_size:
           self.exitGateway(14)
         widthOutput = int((dimensionInputResult[0] + 2 * padding - kernel_size) / stride) + 1
         heightOutput = int((dimensionInputResult[1] + 2 * padding - kernel_size) / stride) + 1
+        if layer._type == 'ConvTranspose2d':
+          widthOutput = int((dimensionInputResult[0] - 1) * stride) + kernel_size - 2 * padding
+          heightOutput = int((dimensionInputResult[1] - 1) * stride) + kernel_size - 2 * padding
         depthOutput = out_channels
         self.dictLayer[nameLayer].dimensionOutputResult = [widthOutput, heightOutput, depthOutput]
       elif layer._type == 'Linear':
@@ -222,7 +253,7 @@ class _net:
     indexLayer = min(int(positionLayer * numberLayer), numberLayer - 1)
     return listLayer[indexLayer]
 
-  def getLayerDimensionC2C(self, dimensionInput, dimensionOutput, numFilter, sizeFilter):
+  def getLayerDimensionC2C(self, dimensionInput, dimensionOutput, numFilter, sizeFilter, reverse = False):
     sizeInput = dimensionInput[0]
     sizeOutput = dimensionOutput[0]
     listSizeFeasible = []
@@ -246,6 +277,9 @@ class _net:
         stride = 1
       if sizeKernel == 3:
         padding = 1
+    if reverse:
+      inChannel = dimensionOutput[2]
+      outChannel = max(1, int(numFilter * dimensionInput[2]))
     return [inChannel, outChannel, sizeKernel, stride, padding]
 
   def getLayerDimensionC2L(self, dimensionInput, dimensionOutput, sizeLinear):
@@ -281,7 +315,6 @@ class _net:
       sqrtSizeOutput = listSqrtSizeFeasible[min(int(sizeLinear * len(listSqrtSizeFeasible)), len(listSqrtSizeFeasible) - 1)]
       # smaller the indexSizeFilter, the smaller Conv2d filter size
       indexSizeFilter = min(int(sizeFilter * len(dictSizeFilterFeasible[sqrtSizeOutput])), len(dictSizeFilterFeasible[sqrtSizeOutput]) - 1)
-
       inChannel = dimensionInput[2]
       outChannelMax = int(sizeOutput / (sqrtSizeOutput * sqrtSizeOutput))
       outChannel = max(1, int(sizeLinear * outChannelMax))
@@ -305,7 +338,15 @@ class _net:
     nameLayerEnd = layerEnd.name
     dimensionInput = layerStart.dimensionOutputResult
     dimensionOutput = layerEnd.dimensionInputResult
-    layerNew = _layer(nameLayer, typeLayer, dimensionLayer, self.birthdayLatest + 1)
+    dimensionInputNew = []
+    if typeLayer == 'ConvTranspose2d':
+      if layerStart._type == 'Linear' or (layerStart._type == 'Input' and len(layerStart.dimensionOutputResult) == 1):
+        widthNew = (dimensionInput[0] / dimensionLayer[0]) ** 0.5
+        heightNew = (dimensionInput[0] / dimensionLayer[0]) ** 0.5
+        dimensionInputNew = [int(widthNew), int(heightNew), dimensionLayer[0]]
+      elif layerStart._type == 'ConvTranspose2d' or (layerStart._type == 'Input' and len(layerStart.dimensionOutputResult) == 3):
+        dimensionInputNew = copy.deepcopy(dimensionInput)
+    layerNew = _layer(nameLayer, typeLayer, dimensionLayer, self.birthdayLatest + 1, dimensionInputNew)
     self.birthdayLatest += 1
     self.listNameLayer.append(nameLayer)
     self.dictLayer[nameLayer] = layerNew
@@ -325,7 +366,21 @@ class _net:
         depthOutput = dimensionLayer[1]
         layerEnd.dimension[0] += widthOutput * heightOutput * depthOutput
     elif typeLayer == 'Linear':
-      layerEnd.dimension[0] += dimensionLayer[1]
+      if layerEnd._type == 'Linear':
+        layerEnd.dimension[0] += dimensionLayer[1]
+      elif layerEnd._type == 'ConvTranspose2d':
+        layerEnd.dimension[0] += int(dimensionLayer[1] / (dimensionOutput[0] * dimensionOutput[1]))
+    elif typeLayer == 'ConvTranspose2d':
+      if layerEnd._type == 'ConvTranspose2d':
+        layerEnd.dimension[0] += dimensionLayer[1]
+      elif layerEnd._type == 'Linear':
+        sizeKernel = dimensionLayer[2]
+        stride = dimensionLayer[3]
+        padding = dimensionLayer[4]
+        widthOutput = int((dimensionInputNew[0] - 1) * stride) - 2 * padding + sizeKernel
+        heightOutput = int((dimensionInputNew[1] - 1) * stride) - 2 * padding + sizeKernel
+        depthOutput = dimensionLayer[1]
+        layerEnd.dimension[0] += widthOutput * heightOutput * depthOutput
     dimensionExtra.append(copy.deepcopy(layerEnd.dimension[0]) - 1)
     return dimensionExtra
 
@@ -348,12 +403,6 @@ class _net:
     dimensionOutput = layerEnd.dimensionInputResult
     typeLayer = ''
     dimensionLayer = []
-    if layerStart._type == 'Input' and len(dimensionInput) == 1 and layerEnd._type == 'Conv2d':
-      return False, {}
-    if layerEnd._type == 'Input':
-      return False, {}
-    if layerStart._type == 'Linear' and layerEnd._type == 'Conv2d':
-      return False, {}
     if ((layerStart._type == 'Input' and len(dimensionInput) == 3) or layerStart._type == 'Conv2d') and layerEnd._type == 'Conv2d':
       if dimensionInput[0] < dimensionOutput[0]:
         return False, {}
@@ -377,6 +426,39 @@ class _net:
       print ('################')
       typeLayer = 'Linear'
       dimensionLayer = self.getLayerDimensionL2L(dimensionInput, dimensionOutput, sizeLinear)
+    elif ((layerStart._type == 'Input' and len(dimensionInput) == 1) or layerStart._type == 'Linear') and layerEnd._type == 'ConvTranspose2d':
+      if dimensionInput[0] < dimensionOutput[0] * dimensionOutput[1]:
+        return False, {}
+      listSqrtSizeFeasible = []
+      for depth in range(1, dimensionInput[0]):
+        modulusSize = dimensionInput[0] % depth
+        if modulusSize == 0:
+          sqrtSizeFeasible = (dimensionInput[0] / depth) ** (0.5)
+          if sqrtSizeFeasible.is_integer() and (sqrtSizeFeasible <= dimensionOutput[0] or sqrtSizeFeasible <= dimensionOutput[1]):
+            if sqrtSizeFeasible < 1:
+              break
+            listSqrtSizeFeasible.append(int(sqrtSizeFeasible))
+      if not listSqrtSizeFeasible:
+        return False, {}
+      sizeOutput = listSqrtSizeFeasible[min(int(sizeLinear * len(listSqrtSizeFeasible)), len(listSqrtSizeFeasible) - 1)]
+      dimensionOutputNew = [sizeOutput, sizeOutput, int(dimensionInput[0] / (sizeOutput * sizeOutput))]
+      print ()
+      print ('#########################')
+      print ('Linear to ConvTranspose2d')
+      print ('#########################')
+      typeLayer = 'ConvTranspose2d'
+      dimensionLayer = self.getLayerDimensionC2C(dimensionOutput, dimensionOutputNew, numFilter, sizeFilter, True)
+    elif ((layerStart._type == 'Input' and len(dimensionInput) == 3) or layerStart._type == 'ConvTranspose2d') and layerEnd._type == 'ConvTranspose2d':
+      if dimensionInput[0] > dimensionOutput[0]:
+        return False, {}
+      print ()
+      print ('##################################')
+      print ('ConvTranspose2d to ConvTranspose2d')
+      print ('##################################')
+      typeLayer = 'ConvTranspose2d'
+      dimensionLayer = self.getLayerDimensionC2C(dimensionOutput, dimensionInput, numFilter, sizeFilter, True)
+    else:
+      return False, {}
     dimensionExtra = self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
     print ('\n@@@ graph is valid:', self.validateGraph(), '@@@')
     historyAction.append('Add')
@@ -535,6 +617,12 @@ class _net:
                   dimensionStart += outputPast[0] * outputPast[1] * outputPast[2]
                 elif typePast == 'Linear' or (typePast == 'Input' and len(outputPast) == 1):
                   dimensionStart += dimensionPast[1]
+              elif typeNext == 'ConvTranspose2d':
+                if typePast == 'ConvTranspose2d' or (typePast == 'Input' and len(outputPast) == 3):
+                  dimensionStart += dimensionPast[1]
+                elif typePast == 'Linear' or (typePast == 'Input' and len(outputPast) == 1):
+                  dimensionInputNext = layerNext.dimensionInputResult
+                  dimensionStart += int(dimensionPast[1] / (dimensionInputNext[0] * dimensionInputNext[1]))
           # dimension for removal
           dimensionTrimed = 0
           if typeNext == 'Conv2d':
@@ -544,6 +632,12 @@ class _net:
               dimensionTrimed = outputThis[0] * outputThis[1] * outputThis[2]
             elif typeThis == 'Linear' or (typeThis == 'Input' and len(outputThis) == 1):
               dimensionTrimed = dimensionThis[1]
+          elif typeNext == 'ConvTranspose2d':
+            if typeThis == 'ConvTranspose2d' or (typeThis == 'Input' and len(outputThis) == 3):
+              dimensionTrimed = dimensionThis[1]
+            elif typeThis == 'Linear' or (typeThis == 'Input' and len(outputThis) == 1):
+              dimensionInputNext = layerNext.dimensionInputResult
+              dimensionTrimed = int(dimensionThis[1] / (dimensionInputNext[0] * dimensionInputNext[1]))
           listDimensionTrimed = [dimensionStart, dimensionStart + dimensionTrimed]
           dictPathTrimed[nameNext].append(listDimensionTrimed)
     # sort and merge trimed path's dimension
@@ -581,6 +675,12 @@ class _net:
             dimensionNext[0] -= outputThis[0] * outputThis[1] * outputThis[2]
           elif typeThis == 'Linear' or (typeThis == 'Input' and len(outputThis) == 1):
             dimensionNext[0] -= dimensionThis[1]
+        if typeNext == 'ConvTranspose2d':
+          if typeThis == 'ConvTranspose2d' or (typeThis == 'Input' and len(outputThis) == 3):
+            dimensionNext[0] -= dimensionThis[1]
+          elif typeThis == 'Linear' or (typeThis == 'Input' and len(outputThis) == 1):
+            dimensionInputNext = layerNext.dimensionInputResult
+            dimensionNext[0] -= int(dimensionThis[1] / (dimensionInputNext[0] * dimensionInputNext[1]))
     # trim layer information
     self.dictGraph = copy.deepcopy(dictGraph)
     for nameIsolated in listIsolated:
@@ -680,6 +780,7 @@ class _net:
     script = scriptLibary + scriptClass + scriptInit + scriptForward + scriptReturn
     return script
 
+# Conv2d -> Conv2d -> Conv2d -> Linear -> Linear -> Linear
 input1 = _layer('input1', 'Input', [120, 120, 3])
 input2 = _layer('input2', 'Input', [32])
 layer1 = _layer('layer1', 'Conv2d', [3, 32, 3, 1, 1])
@@ -696,15 +797,49 @@ listLayerName = ['layer1', 'layer2', 'layer3', 'layer4', 'layer5', 'layer6']
 dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1}
 dictGraph = {'input1': ['layer1'], 'input2': ['layer5'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
 
+# Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
+input2 = _layer('input2', 'Input', [32])
+layer3 = _layer('layer3', 'Linear', [32, 128])
+layer4 = _layer('layer4', 'Linear', [128, 256])
+layer5 = _layer('layer5', 'ConvTranspose2d', [4, 8, 6, 4, 1], 0, [8, 8, 4])
+layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 21, 3, 0], 0, [32, 32, 8])
+output1 = _layer('output1', 'Output', [120, 120, 2])
+output2 = _layer('output2', 'Output', [256])
+
+listNameInput = ['input2']
+listNameOutput = ['output1', 'output2']
+listLayerName = ['layer3', 'layer4', 'layer5', 'layer6']
+dictLayer = {'input2': input2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1, 'output2': output2}
+dictGraph = {'input2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5', 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
+
+# Conv2d -> Conv2d -> Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
+input1 = _layer('input1', 'Input', [120, 120, 3])
+input2 = _layer('input2', 'Input', [32])
+layer1 = _layer('layer1', 'Conv2d', [3, 32, 3, 2, 1])
+layer2 = _layer('layer2', 'Conv2d', [32, 8, 4, 3, 0])
+layer3 = _layer('layer3', 'Linear', [2888 + 32, 128])
+layer4 = _layer('layer4', 'Linear', [128, 256])
+layer5 = _layer('layer5', 'ConvTranspose2d', [4, 8, 6, 4, 1], 0, [8, 8, 4])
+layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 21, 3, 0], 0, [32, 32, 8])
+output1 = _layer('output1', 'Output', [120, 120, 2])
+output2 = _layer('output2', 'Output', [256])
+
+listNameInput = ['input1', 'input2']
+listNameOutput = ['output1', 'output2']
+listLayerName = ['layer1', 'layer2', 'layer3', 'layer4', 'layer5', 'layer6']
+dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1, 'output2': output2}
+dictGraph = {'input1': ['layer1'], 'input2': ['layer3'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5', 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
+
 mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictGraph)
+
 print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
-script = mk1.createPytorchScript()
-fileScript = open('net.py', 'w')
-fileScript.write(script)
-fileScript.close()
-import net
-imp.reload(net)
-modelNew = net._net()
+#script = mk1.createPytorchScript()
+#fileScript = open('net.py', 'w')
+#fileScript.write(script)
+#fileScript.close()
+#import net
+#imp.reload(net)
+#modelNew = net._net()
 
 historyAction = []
 countAddNotEqual = 0
@@ -751,6 +886,7 @@ while True:
     isValidAction, dictDiffLayer = mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
     strAction += '\n\n#REMOVE\n#' + str(dictDiffLayer)
   if isValidAction:
+    continue
     modelOld = modelNew
     script = mk1.createPytorchScript()
     fileScript = open('net.py', 'a')
