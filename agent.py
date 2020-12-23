@@ -737,7 +737,7 @@ class _net:
       scriptDimension = ''
       for dimension in layer.dimension:
         scriptDimension += ', ' + str(dimension)
-      scriptInit += '(' + scriptDimension[2:] + ')'
+      scriptInit += '(' + scriptDimension[2:] + ').double()'
     # inference
     scriptForward = '\n\n  def forward(self'
     for nameInput in self.listNameInput:
@@ -755,6 +755,12 @@ class _net:
           if 'input' not in nameSource:
             strInput += 'output_'
           strInput += nameSource + '.view(-1, ' + str(dimensionResult) + ')'
+        elif len(dimensionOutput) == 1 and typeLayer == 'ConvTranspose2d':
+          dimensionInput = self.dictLayer[nameLayer].dimensionInputResult
+          depthInput = int(dimensionOutput[0] / (dimensionInput[0] * dimensionInput[1]))
+          if 'input' not in nameSource:
+            strInput += 'output_'
+          strInput += nameSource + '.view(1, ' + str(depthInput) + ', ' + str(dimensionInput[0]) + ', ' + str(dimensionInput[1]) + ')'
         else:
           if 'input' not in nameSource:
             strInput += 'output_'
@@ -767,6 +773,8 @@ class _net:
         scriptForward += 'F.relu(self.'
       elif typeLayer == 'Linear':
         scriptForward += 'torch.sigmoid(self.'
+      elif typeLayer == 'ConvTranspose2d':
+        scriptForward += 'F.relu(self.'
       scriptForward += nameLayer + '(' + strInput + '))'
     scriptOutput = ''
     for nameOutput in self.listNameOutput:
@@ -797,21 +805,6 @@ listLayerName = ['layer1', 'layer2', 'layer3', 'layer4', 'layer5', 'layer6']
 dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1}
 dictGraph = {'input1': ['layer1'], 'input2': ['layer5'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
 
-# Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
-input2 = _layer('input2', 'Input', [32])
-layer3 = _layer('layer3', 'Linear', [32, 128])
-layer4 = _layer('layer4', 'Linear', [128, 256])
-layer5 = _layer('layer5', 'ConvTranspose2d', [4, 8, 6, 4, 1], 0, [8, 8, 4])
-layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 21, 3, 0], 0, [32, 32, 8])
-output1 = _layer('output1', 'Output', [120, 120, 2])
-output2 = _layer('output2', 'Output', [256])
-
-listNameInput = ['input2']
-listNameOutput = ['output1', 'output2']
-listLayerName = ['layer3', 'layer4', 'layer5', 'layer6']
-dictLayer = {'input2': input2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1, 'output2': output2}
-dictGraph = {'input2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5', 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
-
 # Conv2d -> Conv2d -> Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
 input1 = _layer('input1', 'Input', [120, 120, 3])
 input2 = _layer('input2', 'Input', [32])
@@ -820,26 +813,43 @@ layer2 = _layer('layer2', 'Conv2d', [32, 8, 4, 3, 0])
 layer3 = _layer('layer3', 'Linear', [2888 + 32, 128])
 layer4 = _layer('layer4', 'Linear', [128, 256])
 layer5 = _layer('layer5', 'ConvTranspose2d', [4, 8, 6, 4, 1], 0, [8, 8, 4])
-layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 21, 3, 0], 0, [32, 32, 8])
-output1 = _layer('output1', 'Output', [120, 120, 2])
-output2 = _layer('output2', 'Output', [256])
+layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 27, 3, 0], 0, [32, 32, 8])
+output1 = _layer('output1', 'Output', [120, 120, 3])
+#output2 = _layer('output2', 'Output', [256])
 
 listNameInput = ['input1', 'input2']
-listNameOutput = ['output1', 'output2']
+listNameOutput = ['output1']#, 'output2']
 listLayerName = ['layer1', 'layer2', 'layer3', 'layer4', 'layer5', 'layer6']
-dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1, 'output2': output2}
-dictGraph = {'input1': ['layer1'], 'input2': ['layer3'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5', 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
+dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1}#, 'output2': output2}
+dictGraph = {'input1': ['layer1'], 'input2': ['layer3'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
+#, 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
+
+# Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
+input2 = _layer('input2', 'Input', [32])
+layer3 = _layer('layer3', 'Linear', [32, 128])
+layer4 = _layer('layer4', 'Linear', [128, 256])
+layer5 = _layer('layer5', 'ConvTranspose2d', [4, 8, 6, 4, 1], 0, [8, 8, 4])
+layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 27, 3, 0], 0, [32, 32, 8])
+output1 = _layer('output1', 'Output', [120, 120, 3])
+#output2 = _layer('output2', 'Output', [256])
+
+listNameInput = ['input2']
+listNameOutput = ['output1']#, 'output2']
+listLayerName = ['layer3', 'layer4', 'layer5', 'layer6']
+dictLayer = {'input2': input2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1}#, 'output2': output2}
+dictGraph = {'input2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
+#, 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
 
 mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictGraph)
 
 print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
-#script = mk1.createPytorchScript()
-#fileScript = open('net.py', 'w')
-#fileScript.write(script)
-#fileScript.close()
-#import net
-#imp.reload(net)
-#modelNew = net._net()
+script = mk1.createPytorchScript()
+fileScript = open('net.py', 'w')
+fileScript.write(script)
+fileScript.close()
+import net
+imp.reload(net)
+modelNew = net._net()
 
 historyAction = []
 countAddNotEqual = 0
@@ -868,7 +878,11 @@ while True:
   actionRead = tensorAction[2]
   isValidAction = False
   dictDiffLayer = {}
-  strAction = ''
+  # for debug purpose
+  strAction = '\n\n#dictLayer = {'
+  for nameLayer in mk1.listNameLayer:
+    strAction += ', \'' + nameLayer + '\': \'' + mk1.dictLayer[nameLayer]._type + '\''
+  strAction += '}'
   if actionRead > actionAdd and actionRead > actionRemove:
     continue
   if actionAdd > actionRemove and actionAdd > actionRead:
@@ -886,7 +900,6 @@ while True:
     isValidAction, dictDiffLayer = mk1.actionRemove(positionStartRemove, positionEndRemove, lengthPathRemove)
     strAction += '\n\n#REMOVE\n#' + str(dictDiffLayer)
   if isValidAction:
-    continue
     modelOld = modelNew
     script = mk1.createPytorchScript()
     fileScript = open('net.py', 'a')
@@ -915,6 +928,8 @@ while True:
             paraNew[:, : dictDiffLayer[nameLayer][0][0], :, :] = paraOld
           elif typeLayer == 'Linear':
             paraNew[:, : dictDiffLayer[nameLayer][0][0]] = paraOld
+          elif typeLayer == 'ConvTranspose2d':
+            paraNew[: dictDiffLayer[nameLayer][0][0], :, :, :] = paraOld
           stateDict[key] = torch.tensor(paraNew).cuda()
         else:
           stateDict[key] = modelOld.state_dict()[key]
@@ -937,6 +952,8 @@ while True:
                 paraOld[:, pathTrimed[0] : pathTrimed[1], :, :] = paraZeros[:, pathTrimed[0] : pathTrimed[1], :, :]
               elif typeLayer == 'Linear':
                 paraOld[:, pathTrimed[0] : pathTrimed[1]] = paraZeros[:, pathTrimed[0] : pathTrimed[1]]
+              elif typeLayer == 'ConvTranspose2d':
+                paraOld[pathTrimed[0] : pathTrimed[1], :, :, :] = paraZeros[pathTrimed[0] : pathTrimed[1], :, :, :]
               stateDictOld[key] = torch.tensor(paraOld).cuda()
             startOld = 0
             endOld = 0
@@ -952,11 +969,14 @@ while True:
                 else:
                   continue
               elif interval == len(dimensionTrimed):
-                if dimensionTrimed[interval - 1][1] != paraOld.shape[1]:
+                dimensionEnd = 1
+                if typeLayer == 'ConvTranspose2d':
+                  dimensionEnd = 0
+                if dimensionTrimed[interval - 1][1] != paraOld.shape[dimensionEnd]:
                   startOld = dimensionTrimed[len(dimensionTrimed) - 1][1]
-                  endOld = paraOld.shape[1]
+                  endOld = paraOld.shape[dimensionEnd]
                   startNew = endNew
-                  endNew = paraNew.shape[1]
+                  endNew = paraNew.shape[dimensionEnd]
                 else:
                   continue
               else:
@@ -968,6 +988,8 @@ while True:
                 paraNew[:, startNew : endNew, :, :] = paraOld[:, startOld : endOld, :, :]
               elif typeLayer == 'Linear':
                 paraNew[:, startNew : endNew] = paraOld[:, startOld : endOld]
+              elif typeLayer == 'ConvTranspose2d':
+                paraNew[startNew : endNew, :, :, :] = paraOld[startOld : endOld, :, :, :]
               stateDictNew[key] = torch.tensor(paraNew).cuda()
           elif 'bias' in key and len(dictDiffLayer[nameLayer]) > 0:
             stateDictNew[key] = modelOld.state_dict()[key]
@@ -979,11 +1001,13 @@ while True:
     # testing output for both models
     modelOld.cuda()
     modelNew.cuda()
-    input1 = torch.rand(1, 3, 120, 120).cuda()
-    input2 = torch.rand(1, 32).cuda()
-    outputOld = modelOld(input1, input2).cpu().data.numpy()
-    outputNew = modelNew(input1, input2).cpu().data.numpy()
-    if (outputOld == outputNew).all():
+    #input1 = torch.rand(1, 3, 120, 120).cuda()
+    input2 = torch.rand(1, 32).double().cuda()
+    #outputOld = modelOld(input1, input2).cpu().data.numpy()
+    #outputNew = modelNew(input1, input2).cpu().data.numpy()
+    outputOld = modelOld(input2).cpu().data.numpy()
+    outputNew = modelNew(input2).cpu().data.numpy()
+    if np.allclose(outputNew, outputOld):
       print ('\n@@@ models\' outputs are equivalent @@@')
     else:
       print ('\n@@@ models\' outputs are not equal @@@')
@@ -991,16 +1015,19 @@ while True:
         countAddNotEqual += 1
       elif actionRemove > actionAdd:
         countRemoveNotEqual += 1
-      print ()
-      print ('old network output:\n', outputOld)
-      print ('new network output:\n', outputNew)
+      print ('\nold network output:\n', outputOld)
+      print ('\nnew network output:\n', outputNew)
+      outputOld = outputOld.flatten()
+      outputNew = outputNew.flatten()
       counter = 0
-      for count in range(len(outputOld[0])):
-        if outputOld[0][count] != outputNew[0][count]:
-          print ('position:', count + 1, 'error:', np.abs(outputOld[0][count] - outputNew[0][count]))
+      for count in range(len(outputOld)):
+        if not np.allclose(outputOld[count], outputNew[count]):
+          if counter < 10:
+            print ('\nposition:', count, outputOld[count], outputNew[count], 'error:', np.abs(outputOld[count] - outputNew[count]))
           counter += 1
       print ('\ntotal number of error:', counter)
       print ('\naverage error:', np.sum(np.abs(outputOld - outputNew)) / len(outputOld))
+      exit()
 
     # after training (fill all zeros with small values)
     stateDictNew = modelNew.state_dict()
@@ -1013,11 +1040,15 @@ while True:
           bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
         elif mk1.dictLayer[nameLayer]._type == 'Linear':
           bound = 1.0 / (paraNew.shape[1] ** 0.5)
+        elif mk1.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+          bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
         paraInit = np.random.uniform(-bound, bound, paraNew.shape)
         for pathInit in dictDiffLayer[nameLayer]:
           if mk1.dictLayer[nameLayer]._type == 'Conv2d':
             paraNew[:, pathInit[0] : pathInit[1], :, :] = paraInit[:, pathInit[0] : pathInit[1], :, :]
           elif mk1.dictLayer[nameLayer]._type == 'Linear':
             paraNew[:, pathInit[0] : pathInit[1]] = paraInit[:, pathInit[0] : pathInit[1]]
+          elif mk1.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+            paraNew[pathInit[0] : pathInit[1], :, :, :] = paraInit[pathInit[0] : pathInit[1], :, :, :]
         stateDictNew[key] = torch.tensor(paraNew).cuda()
       modelNew.load_state_dict(stateDictNew)
