@@ -241,6 +241,12 @@ class _net:
         if in_features != dimensionInputResult[0]:
           self.exitGateway(15)
         self.dictLayer[nameLayer].dimensionOutputResult = [out_features]
+    for nameOutput in self.listNameOutput:
+      for nameLayerBackward in self.dictGraphReversed[nameOutput]:
+        layerBackward = self.dictLayer[nameLayerBackward]
+        dimensionOutputLayerBackward = layerBackward.dimensionOutputResult
+        if not dimensionOutputLayerBackward == self.dictLayer[nameOutput].dimensionInputResult:
+          self.exitGateway(21)
     print ('\n@@@ all dimension are valid @@@')
     return True
 
