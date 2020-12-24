@@ -19,6 +19,9 @@ class _layer:
     self._type = _type
     self.dimension = dimension
     self.birthday = birthday
+    if not (_type == 'Input' or _type == 'Output' or _type == 'Conv2d' or _type == 'Linear' or _type == 'ConvTranspose2d'):
+      print ('unknown layer type for layer:', name)
+      exit()
     # Conv2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
     # Linear dimension: [in_features, out_features]
     # ConvTranspose2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
@@ -57,11 +60,6 @@ class _net:
     self.dictGraph = dictGraph
 
   def exitGateway(self, number):
-    print ('\ninput(s):', self.listNameInput)
-    print ('\nlayer(s):', self.listNameLayer)
-    print ('\noutput(s):', self.listNameOutput)
-    print ('\ngraph:\n', self.dictGraph)
-    print ('\nreversed graph:\n', self.dictGraphReversed)
     for nameLayer in self.listNameLayer:
       layer = self.dictLayer[nameLayer]
       print ()
@@ -69,6 +67,11 @@ class _net:
       print (layer.dictDimensionInput)
       print (layer.dimensionInputResult)
       print (layer.dimensionOutputResult)
+    print ('\ninput(s):', self.listNameInput)
+    print ('\nlayer(s):', self.listNameLayer)
+    print ('\noutput(s):', self.listNameOutput)
+    print ('\ngraph:\n', self.dictGraph)
+    print ('\nreversed graph:\n', self.dictGraphReversed)
     print ('exit gateway:', number)
     exit()
 
@@ -84,21 +87,19 @@ class _net:
           self.exitGateway(2)
       elif typeLayer == 'ConvTranspose2d':
         if not (typeLayerForward == 'ConvTranspose2d' or typeLayerForward == 'Output'):
-          self.exitGateway(16)
+          self.exitGateway(3)
       elif typeLayer == 'Input':
         if typeLayerForward == 'Output':
-          self.exitGateway(3)
+          self.exitGateway(4)
       else:
-        self.exitGateway(4)
+        self.exitGateway(5)
     return True
 
   def validateConnection(self):
     for nameInput in self.listNameInput:
-      if not self.hasValidConnection(nameInput):
-        self.exitGateway(5)
+      self.hasValidConnection(nameInput)
     for nameLayer in self.listNameLayer:
-      if not self.hasValidConnection(nameLayer):
-        self.exitGateway(6)
+      self.hasValidConnection(nameLayer)
     print ('\n@@@ all connection are valid @@@')
     return True
 
@@ -148,12 +149,12 @@ class _net:
       print ('\nlayer(s) ready:\n', listNameLayer)
       for nameLayer in listNameLayerNotReady:
         print (nameLayer, self.dictGraph[nameLayer], self.dictGraphReversed[nameLayer])
-      self.exitGateway(7)
+      self.exitGateway(6)
     self.listNameLayer = listNameLayer
 
   def validateDimension(self):
     if not self.validateConnection():
-      self.exitGateway(8)
+      self.exitGateway(7)
     self.computeReversedGraph()
     self.computeLayerPrecedence()
     for nameLayer in self.listNameLayer:
@@ -173,9 +174,9 @@ class _net:
             dimensionInputResult = copy.deepcopy(dimensionOutputLayerBackward)
           else:
             if dimensionInputResult[0] != dimensionOutputLayerBackward[0]:
-              self.exitGateway(9)
+              self.exitGateway(8)
             if dimensionInputResult[1] != dimensionOutputLayerBackward[1]:
-              self.exitGateway(10)
+              self.exitGateway(9)
             # expect 'Input'/'Conv2d' and stacking of out_channels
             dimensionInputResult[2] += dimensionOutputLayerBackward[2]
         elif layer._type == 'Linear':
@@ -187,7 +188,7 @@ class _net:
             elif len(dimensionOutputLayerBackward) == 3:
               dimensionInputResult[0] += dimensionOutputLayerBackward[0] * dimensionOutputLayerBackward[1] * dimensionOutputLayerBackward[2]
             else:
-              self.exitGateway(11)
+              self.exitGateway(10)
           elif layerBackward._type == 'Conv2d' or layerBackward._type == 'ConvTranspose2d':
             dimensionInputResult[0] += dimensionOutputLayerBackward[0] * dimensionOutputLayerBackward[1] * dimensionOutputLayerBackward[2]
           elif layerBackward._type == 'Linear':
@@ -198,17 +199,17 @@ class _net:
             dimensionInputResult[2] = 0
           if len(dimensionOutputLayerBackward) == 3:
             if dimensionInputResult[0] != dimensionOutputLayerBackward[0]:
-              self.exitGateway(17)
+              self.exitGateway(11)
             if dimensionInputResult[1] != dimensionOutputLayerBackward[1]:
-              self.exitGateway(18)
+              self.exitGateway(12)
             # expect 'Input'/'ConvTranspose2d' and stacking of out_channels
             dimensionInputResult[2] += dimensionOutputLayerBackward[2]
           else: # Linear / Input (1D)
             if dimensionInputResult[0] * dimensionInputResult[1] > dimensionOutputLayerBackward[0]:
-              self.exitGateway(19)
+              self.exitGateway(13)
             depthInput = dimensionOutputLayerBackward[0] / (layer.dimensionInputResult[0] * layer.dimensionInputResult[1])
             if not depthInput.is_integer():
-              self.exitGateway(20)
+              self.exitGateway(14)
             dimensionInputResult[2] += int(depthInput)
         self.dictLayer[nameLayer].dictDimensionInput = copy.deepcopy(dictDimensionInput)
         self.dictLayer[nameLayer].dimensionInputResult = copy.deepcopy(dimensionInputResult)
@@ -222,12 +223,12 @@ class _net:
         stride = layer.dimension[3]
         padding = layer.dimension[4]
         if in_channels != dimensionInputResult[2]:
-          self.exitGateway(12)
+          self.exitGateway(15)
         if kernel_size > dimensionInputResult[0] or kernel_size > dimensionInputResult[1]:
           if layer._type == 'Conv2d':
-            self.exitGateway(13)
+            self.exitGateway(16)
         if stride > kernel_size:
-          self.exitGateway(14)
+          self.exitGateway(17)
         widthOutput = int((dimensionInputResult[0] + 2 * padding - kernel_size) / stride) + 1
         heightOutput = int((dimensionInputResult[1] + 2 * padding - kernel_size) / stride) + 1
         if layer._type == 'ConvTranspose2d':
@@ -239,14 +240,14 @@ class _net:
         in_features = layer.dimension[0]
         out_features = layer.dimension[1]
         if in_features != dimensionInputResult[0]:
-          self.exitGateway(15)
+          self.exitGateway(18)
         self.dictLayer[nameLayer].dimensionOutputResult = [out_features]
     for nameOutput in self.listNameOutput:
       for nameLayerBackward in self.dictGraphReversed[nameOutput]:
         layerBackward = self.dictLayer[nameLayerBackward]
         dimensionOutputLayerBackward = layerBackward.dimensionOutputResult
         if not dimensionOutputLayerBackward == self.dictLayer[nameOutput].dimensionInputResult:
-          self.exitGateway(21)
+          self.exitGateway(19)
     print ('\n@@@ all dimension are valid @@@')
     return True
 
@@ -894,7 +895,6 @@ while True:
           # TODO initialize with small values instead of zeros
           paraNew = np.zeros(paraNew.shape)
           typeLayer = mk1.dictLayer[nameLayer]._type
-          # TODO assuming new layer appends at the end
           if typeLayer == 'Conv2d':
             paraNew[:, : dictDiffLayer[nameLayer][0][0], :, :] = paraOld
           elif typeLayer == 'Linear':
