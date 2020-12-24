@@ -730,7 +730,7 @@ class _net:
     historyAction.append('Remove')
     return True, dictPathTrimed
 
-  def createPytorchScript(self):
+  def createPyTorchScript(self):
     self.computeReversedGraph()
     self.computeLayerPrecedence()
     scriptLibary = 'import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\n'
@@ -745,10 +745,9 @@ class _net:
         scriptDimension += ', ' + str(dimension)
       scriptInit += '(' + scriptDimension[2:] + ').double()'
     # inference
-    scriptForward = '\n\n  def forward(self'
-    for nameInput in self.listNameInput:
-      scriptForward += ', ' + nameInput
-    scriptForward += '):'
+    scriptForward = '\n\n  def forward(self, inputModel):'
+    for countInput in range(len(self.listNameInput)):
+      scriptForward += '\n    ' + self.listNameInput[countInput] + ' = inputModel[' + str(countInput) + ']'
     for nameLayer in self.listNameLayer:
       typeLayer = self.dictLayer[nameLayer]._type
       listNameSource = self.dictGraphReversed[nameLayer]
@@ -790,26 +789,9 @@ class _net:
     scriptReturn = ''
     for nameOutput in self.listNameOutput:
       scriptReturn += ', ' + nameOutput
-    scriptReturn = '\n    return ' + scriptReturn[2:]
+    scriptReturn = '\n    return [' + scriptReturn[2:] + ']'
     script = scriptLibary + scriptClass + scriptInit + scriptForward + scriptReturn
     return script
-
-# Conv2d -> Conv2d -> Conv2d -> Linear -> Linear -> Linear
-input1 = _layer('input1', 'Input', [120, 120, 3])
-input2 = _layer('input2', 'Input', [32])
-layer1 = _layer('layer1', 'Conv2d', [3, 32, 3, 1, 1])
-layer2 = _layer('layer2', 'Conv2d', [32, 64, 4, 4, 0])
-layer3 = _layer('layer3', 'Conv2d', [64, 128, 5, 5, 0])
-layer4 = _layer('layer4', 'Linear', [4608, 128])
-layer5 = _layer('layer5', 'Linear', [128 + 32, 128])
-layer6 = _layer('layer6', 'Linear', [128, 64])
-output1 = _layer('output1', 'Output', [64])
-
-listNameInput = ['input1', 'input2']
-listNameOutput = ['output1']
-listLayerName = ['layer1', 'layer2', 'layer3', 'layer4', 'layer5', 'layer6']
-dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1}
-dictGraph = {'input1': ['layer1'], 'input2': ['layer5'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
 
 # Conv2d -> Conv2d -> Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
 input1 = _layer('input1', 'Input', [120, 120, 3])
@@ -821,35 +803,18 @@ layer4 = _layer('layer4', 'Linear', [128, 256])
 layer5 = _layer('layer5', 'ConvTranspose2d', [4, 8, 6, 4, 1], 0, [8, 8, 4])
 layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 27, 3, 0], 0, [32, 32, 8])
 output1 = _layer('output1', 'Output', [120, 120, 3])
-#output2 = _layer('output2', 'Output', [256])
+output2 = _layer('output2', 'Output', [256])
 
 listNameInput = ['input1', 'input2']
-listNameOutput = ['output1']#, 'output2']
+listNameOutput = ['output1', 'output2']
 listLayerName = ['layer1', 'layer2', 'layer3', 'layer4', 'layer5', 'layer6']
-dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1}#, 'output2': output2}
-dictGraph = {'input1': ['layer1'], 'input2': ['layer3'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
-#, 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
-
-# Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
-input2 = _layer('input2', 'Input', [32])
-layer3 = _layer('layer3', 'Linear', [32, 128])
-layer4 = _layer('layer4', 'Linear', [128, 256])
-layer5 = _layer('layer5', 'ConvTranspose2d', [4, 8, 6, 4, 1], 0, [8, 8, 4])
-layer6 = _layer('layer6', 'ConvTranspose2d', [8, 3, 27, 3, 0], 0, [32, 32, 8])
-output1 = _layer('output1', 'Output', [120, 120, 3])
-#output2 = _layer('output2', 'Output', [256])
-
-listNameInput = ['input2']
-listNameOutput = ['output1']#, 'output2']
-listLayerName = ['layer3', 'layer4', 'layer5', 'layer6']
-dictLayer = {'input2': input2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1}#, 'output2': output2}
-dictGraph = {'input2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5'], 'layer5': ['layer6'], 'layer6': ['output1']}
-#, 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
+dictLayer = {'input1': input1, 'input2': input2, 'layer1': layer1, 'layer2': layer2, 'layer3': layer3, 'layer4': layer4, 'layer5': layer5, 'layer6': layer6, 'output1': output1, 'output2': output2}
+dictGraph = {'input1': ['layer1'], 'input2': ['layer3'], 'layer1': ['layer2'], 'layer2': ['layer3'], 'layer3': ['layer4'], 'layer4': ['layer5', 'output2'], 'layer5': ['layer6'], 'layer6': ['output1']}
 
 mk1 = _net('mk1', listNameInput, listNameOutput, listLayerName, dictLayer, dictGraph)
 
 print ('\n@@@ graph is valid:', mk1.validateGraph(), '@@@')
-script = mk1.createPytorchScript()
+script = mk1.createPyTorchScript()
 fileScript = open('net.py', 'w')
 fileScript.write(script)
 fileScript.close()
@@ -907,7 +872,7 @@ while True:
     strAction += '\n\n#REMOVE\n#' + str(dictDiffLayer)
   if isValidAction:
     modelOld = modelNew
-    script = mk1.createPytorchScript()
+    script = mk1.createPyTorchScript()
     fileScript = open('net.py', 'a')
     fileScript.write(strAction)
     fileScript.close()
@@ -1007,33 +972,47 @@ while True:
     # testing output for both models
     modelOld.cuda()
     modelNew.cuda()
-    #input1 = torch.rand(1, 3, 120, 120).cuda()
-    input2 = torch.rand(1, 32).double().cuda()
-    #outputOld = modelOld(input1, input2).cpu().data.numpy()
-    #outputNew = modelNew(input1, input2).cpu().data.numpy()
-    outputOld = modelOld(input2).cpu().data.numpy()
-    outputNew = modelNew(input2).cpu().data.numpy()
-    if np.allclose(outputNew, outputOld):
-      print ('\n@@@ models\' outputs are equivalent @@@')
-    else:
-      print ('\n@@@ models\' outputs are not equal @@@')
-      if actionAdd > actionRemove:
-        countAddNotEqual += 1
-      elif actionRemove > actionAdd:
-        countRemoveNotEqual += 1
-      print ('\nold network output:\n', outputOld)
-      print ('\nnew network output:\n', outputNew)
-      outputOld = outputOld.flatten()
-      outputNew = outputNew.flatten()
-      counter = 0
-      for count in range(len(outputOld)):
-        if not np.allclose(outputOld[count], outputNew[count]):
-          if counter < 10:
-            print ('\nposition:', count, outputOld[count], outputNew[count], 'error:', np.abs(outputOld[count] - outputNew[count]))
-          counter += 1
-      print ('\ntotal number of error:', counter)
-      print ('\naverage error:', np.sum(np.abs(outputOld - outputNew)) / len(outputOld))
-      exit()
+    inputModel = []
+    for nameInput in mk1.listNameInput:
+      dimensionInput = mk1.dictLayer[nameInput].dimensionOutputResult
+      if len(dimensionInput) == 3:
+        inputModel.append(torch.rand(1, dimensionInput[2], dimensionInput[0], dimensionInput[1]).double().cuda())
+      elif len(dimensionInput) == 1:
+        inputModel.append(torch.rand(1, dimensionInput[0]).double().cuda())
+      else:
+        print ('undefined input dimension')
+        exit()
+    tensorOutputOld = modelOld(inputModel)
+    tensorOutputNew = modelNew(inputModel)
+    outputOld = []
+    outputNew = []
+    for tensorOld in tensorOutputOld:
+      outputOld.append(tensorOld.cpu().data.numpy())
+    for tensorNew in tensorOutputNew:
+      outputNew.append(tensorNew.cpu().data.numpy())
+    for countOutput in range(len(outputNew)):
+      outNew = outputNew[countOutput]
+      outOld = outputOld[countOutput]
+      if not np.allclose(outNew, outOld):
+        print ('\n@@@ models\' outputs are not equal @@@')
+        if actionAdd > actionRemove:
+          countAddNotEqual += 1
+        elif actionRemove > actionAdd:
+          countRemoveNotEqual += 1
+        print ('\nold network output:\n', outOld)
+        print ('\nnew network output:\n', outNew)
+        outOld = outOld.flatten()
+        outNew = outNew.flatten()
+        countError = 0
+        for position in range(len(outNew)):
+          if not np.allclose(outNew[position], outOld[position]):
+            if countError < 10:
+              print ('\nposition:', position, outNew[position], outOld[position], 'error:', np.abs(outNew[position] - outOld[position]))
+            countError += 1
+        print ('\noutput', str(countOutput + 1), 'total number of error:', countError)
+        print ('\naverage error:', np.sum(np.abs(outNew - outOld)) / len(outNew))
+        exit()
+    print ('\n@@@ models\' outputs are equivalent @@@')
 
     # after training (fill all zeros with small values)
     stateDictNew = modelNew.state_dict()
