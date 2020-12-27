@@ -55,6 +55,7 @@ class _net:
   modelNext = None
   actionOnModel = 'None'
   dictDiffLayer = {}
+  progress = 0.0
 
   def __init__(self, name, listNameInput, listNameOutput, listNameLayer, dictLayer, dictGraph):
     self.name = name
@@ -814,7 +815,7 @@ class _net:
         paraNew = self.modelNext.state_dict()[key].cpu().data.numpy()
         # TODO initialize with small values instead of zeros
         paraNew = np.zeros(paraNew.shape)
-        typeLayer = mk1.dictLayer[nameLayer]._type
+        typeLayer = self.dictLayer[nameLayer]._type
         if typeLayer == 'Conv2d':
           paraNew[:, : self.dictDiffLayer[nameLayer][0][0], :, :] = paraOld
         elif typeLayer == 'Linear':
@@ -828,25 +829,14 @@ class _net:
 
   def modifyModelRemove(self):
     stateDictNew = self.modelNext.state_dict()
-    stateDictOld = self.modelNow.state_dict()
     for key in self.modelNow.state_dict():
       nameLayer = key.split('.')[0]
       if nameLayer in self.dictDiffLayer:
         if 'weight' in key and len(self.dictDiffLayer[nameLayer]) > 0:
           dimensionTrimed = self.dictDiffLayer[nameLayer]
-          typeLayer = mk1.dictLayer[nameLayer]._type
+          typeLayer = self.dictLayer[nameLayer]._type
           paraOld = self.modelNow.state_dict()[key].cpu().data.numpy()
           paraNew = self.modelNext.state_dict()[key].cpu().data.numpy()
-          for pathTrimed in dimensionTrimed:
-            # TODO gradually replace parameters with zeros
-            paraZeros = np.zeros(paraOld.shape)
-            if typeLayer == 'Conv2d':
-              paraOld[:, pathTrimed[0] : pathTrimed[1], :, :] = paraZeros[:, pathTrimed[0] : pathTrimed[1], :, :]
-            elif typeLayer == 'Linear':
-              paraOld[:, pathTrimed[0] : pathTrimed[1]] = paraZeros[:, pathTrimed[0] : pathTrimed[1]]
-            elif typeLayer == 'ConvTranspose2d':
-              paraOld[pathTrimed[0] : pathTrimed[1], :, :, :] = paraZeros[pathTrimed[0] : pathTrimed[1], :, :, :]
-            stateDictOld[key] = torch.tensor(paraOld).cuda()
           startOld = 0
           endOld = 0
           startNew = 0
@@ -887,33 +877,95 @@ class _net:
           stateDictNew[key] = self.modelNow.state_dict()[key]
       else:
         stateDictNew[key] = self.modelNow.state_dict()[key]
-    self.modelNow.load_state_dict(stateDictOld)
     self.modelNext.load_state_dict(stateDictNew)
 
-  def fillWithValues(self):
-    # after training (replaces zeros with small values)
-    stateDictNew = self.modelNext.state_dict()
-    for key in self.modelNext.state_dict():
+  def fillDiffLayer(self):
+    # gradually replacing 'dictDiffLayer''s zeros parameters with small values
+    stateDictOld = self.modelNow.state_dict()
+    for key in self.modelNow.state_dict():
       nameLayer = key.split('.')[0]
       if 'weight' in key and nameLayer in self.dictDiffLayer:
-        paraNew = self.modelNext.state_dict()[key].cpu().data.numpy()
+        paraOld = self.modelNow.state_dict()[key].cpu().data.numpy()
         bound = 1.0
-        if mk1.dictLayer[nameLayer]._type == 'Conv2d':
-          bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
-        elif mk1.dictLayer[nameLayer]._type == 'Linear':
-          bound = 1.0 / (paraNew.shape[1] ** 0.5)
-        elif mk1.dictLayer[nameLayer]._type == 'ConvTranspose2d':
-          bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
-        paraInit = np.random.uniform(-bound, bound, paraNew.shape)
+        if self.dictLayer[nameLayer]._type == 'Conv2d':
+          bound = 1.0 / ((paraOld.shape[1] * paraOld.shape[2] * paraOld.shape[3]) ** 0.5)
+        elif self.dictLayer[nameLayer]._type == 'Linear':
+          bound = 1.0 / (paraOld.shape[1] ** 0.5)
+        elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+          bound = 1.0 / ((paraOld.shape[1] * paraOld.shape[2] * paraOld.shape[3]) ** 0.5)
+        paraInit = np.random.uniform(-bound, bound, paraOld.shape)
         for pathInit in self.dictDiffLayer[nameLayer]:
-          if mk1.dictLayer[nameLayer]._type == 'Conv2d':
-            paraNew[:, pathInit[0] : pathInit[1], :, :] = paraInit[:, pathInit[0] : pathInit[1], :, :]
-          elif mk1.dictLayer[nameLayer]._type == 'Linear':
-            paraNew[:, pathInit[0] : pathInit[1]] = paraInit[:, pathInit[0] : pathInit[1]]
-          elif mk1.dictLayer[nameLayer]._type == 'ConvTranspose2d':
-            paraNew[pathInit[0] : pathInit[1], :, :, :] = paraInit[pathInit[0] : pathInit[1], :, :, :]
-        stateDictNew[key] = torch.tensor(paraNew).cuda()
-      self.modelNext.load_state_dict(stateDictNew)
+          if self.dictLayer[nameLayer]._type == 'Conv2d':
+            paraOld[:, pathInit[0] : pathInit[1], :, :] = paraInit[:, pathInit[0] : pathInit[1], :, :]
+          elif self.dictLayer[nameLayer]._type == 'Linear':
+            paraOld[:, pathInit[0] : pathInit[1]] = paraInit[:, pathInit[0] : pathInit[1]]
+          elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+            paraOld[pathInit[0] : pathInit[1], :, :, :] = paraInit[pathInit[0] : pathInit[1], :, :, :]
+        stateDictOld[key] = torch.tensor(paraOld).cuda()
+      self.modelNow.load_state_dict(stateDictOld)
+
+  def trimDiffLayer(self):
+    # gradually replacing 'dictDiffLayer' parameters with zeros
+    stateDictOld = self.modelNow.state_dict()
+    for key in self.modelNow.state_dict():
+      nameLayer = key.split('.')[0]
+      if nameLayer in self.dictDiffLayer:
+        if 'weight' in key and len(self.dictDiffLayer[nameLayer]) > 0:
+          dimensionTrimed = self.dictDiffLayer[nameLayer]
+          typeLayer = self.dictLayer[nameLayer]._type
+          paraOld = self.modelNow.state_dict()[key].cpu().data.numpy()
+          for pathTrimed in dimensionTrimed:
+            paraZeros = np.zeros(paraOld.shape)
+            if typeLayer == 'Conv2d':
+              paraOld[:, pathTrimed[0] : pathTrimed[1], :, :] = paraZeros[:, pathTrimed[0] : pathTrimed[1], :, :]
+            elif typeLayer == 'Linear':
+              paraOld[:, pathTrimed[0] : pathTrimed[1]] = paraZeros[:, pathTrimed[0] : pathTrimed[1]]
+            elif typeLayer == 'ConvTranspose2d':
+              paraOld[pathTrimed[0] : pathTrimed[1], :, :, :] = paraZeros[pathTrimed[0] : pathTrimed[1], :, :, :]
+            stateDictOld[key] = torch.tensor(paraOld).cuda()
+    self.modelNow.load_state_dict(stateDictOld)
+
+  def compareModelResult(self):
+    # testing output for both models
+    self.modelNow.cuda()
+    self.modelNext.cuda()
+    inputModel = []
+    for nameInput in self.listNameInput:
+      dimensionInput = self.dictLayer[nameInput].dimensionOutputResult
+      if len(dimensionInput) == 3:
+        inputModel.append(torch.rand(1, dimensionInput[2], dimensionInput[0], dimensionInput[1]).double().cuda())
+      elif len(dimensionInput) == 1:
+        inputModel.append(torch.rand(1, dimensionInput[0]).double().cuda())
+      else:
+        print ('undefined input dimension')
+        exit()
+    tensorOutputOld = self.modelNow(inputModel)
+    tensorOutputNew = self.modelNext(inputModel)
+    outputOld = []
+    outputNew = []
+    for tensorOld in tensorOutputOld:
+      outputOld.append(tensorOld.cpu().data.numpy())
+    for tensorNew in tensorOutputNew:
+      outputNew.append(tensorNew.cpu().data.numpy())
+    for countOutput in range(len(outputNew)):
+      outNew = outputNew[countOutput]
+      outOld = outputOld[countOutput]
+      if not np.allclose(outNew, outOld):
+        print ('\n@@@ models\' outputs are not equal @@@')
+        print ('\nold network output:\n', outOld)
+        print ('\nnew network output:\n', outNew)
+        outOld = outOld.flatten()
+        outNew = outNew.flatten()
+        countError = 0
+        for position in range(len(outNew)):
+          if not np.allclose(outNew[position], outOld[position]):
+            if countError < 10:
+              print ('\nposition:', position, outNew[position], outOld[position], 'error:', np.abs(outNew[position] - outOld[position]))
+            countError += 1
+        print ('\noutput', str(countOutput + 1), 'total number of error:', countError)
+        print ('\naverage error:', np.sum(np.abs(outNew - outOld)) / len(outNew))
+        exit()
+    print ('\n@@@ models\' outputs are equivalent @@@')
 
 # Conv2d -> Conv2d -> Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
 input1 = _layer('input1', 'Input', [120, 120, 3])
@@ -946,8 +998,6 @@ mk1.modelNow = net._net()
 mk1.modelNext = mk1.modelNow
 
 historyAction = []
-countAddNotEqual = 0
-countRemoveNotEqual = 0
 
 while True:
   print ()
@@ -961,8 +1011,8 @@ while True:
       countAdd += 1
     elif historyAction[counter] == 'Remove':
       countRemove += 1
-  print ('Add:', countAdd, 'Not Equal:', countAddNotEqual)
-  print ('Remove:', countRemove, 'Not Equal:', countRemoveNotEqual)
+  print ('Add:', countAdd)
+  print ('Remove:', countRemove)
   # action
   tensorAction = []
   for counter in range(16):
@@ -1008,53 +1058,26 @@ while True:
     print ('\ndiffLayer:', mk1.dictDiffLayer)
     if mk1.actionOnModel == 'Add':
       mk1.modifyModelAdd()
+      mk1.compareModelResult()
+      mk1.modelNow = mk1.modelNext
+    elif mk1.actionOnModel == 'Remove':
+      pass
+
+    # training on ModelNow
+    mk1.progress = 0.0
+    while mk1.progress < 1.0:
+      if mk1.actionOnModel == 'Add':
+        mk1.fillDiffLayer()
+      elif mk1.actionOnModel == 'Remove':
+        mk1.trimDiffLayer()
+      mk1.progress = 1.0
+
+    if mk1.actionOnModel == 'Add':
+      pass
     elif mk1.actionOnModel == 'Remove':
       mk1.modifyModelRemove()
+      mk1.compareModelResult()
+      mk1.modelNow = mk1.modelNext
     historyAction.append(mk1.actionOnModel)
-
-    # testing output for both models
-    mk1.modelNow.cuda()
-    mk1.modelNext.cuda()
-    inputModel = []
-    for nameInput in mk1.listNameInput:
-      dimensionInput = mk1.dictLayer[nameInput].dimensionOutputResult
-      if len(dimensionInput) == 3:
-        inputModel.append(torch.rand(1, dimensionInput[2], dimensionInput[0], dimensionInput[1]).double().cuda())
-      elif len(dimensionInput) == 1:
-        inputModel.append(torch.rand(1, dimensionInput[0]).double().cuda())
-      else:
-        print ('undefined input dimension')
-        exit()
-    tensorOutputOld = mk1.modelNow(inputModel)
-    tensorOutputNew = mk1.modelNext(inputModel)
-    outputOld = []
-    outputNew = []
-    for tensorOld in tensorOutputOld:
-      outputOld.append(tensorOld.cpu().data.numpy())
-    for tensorNew in tensorOutputNew:
-      outputNew.append(tensorNew.cpu().data.numpy())
-    for countOutput in range(len(outputNew)):
-      outNew = outputNew[countOutput]
-      outOld = outputOld[countOutput]
-      if not np.allclose(outNew, outOld):
-        print ('\n@@@ models\' outputs are not equal @@@')
-        if actionAdd > actionRemove:
-          countAddNotEqual += 1
-        elif actionRemove > actionAdd:
-          countRemoveNotEqual += 1
-        print ('\nold network output:\n', outOld)
-        print ('\nnew network output:\n', outNew)
-        outOld = outOld.flatten()
-        outNew = outNew.flatten()
-        countError = 0
-        for position in range(len(outNew)):
-          if not np.allclose(outNew[position], outOld[position]):
-            if countError < 10:
-              print ('\nposition:', position, outNew[position], outOld[position], 'error:', np.abs(outNew[position] - outOld[position]))
-            countError += 1
-        print ('\noutput', str(countOutput + 1), 'total number of error:', countError)
-        print ('\naverage error:', np.sum(np.abs(outNew - outOld)) / len(outNew))
-        exit()
-    print ('\n@@@ models\' outputs are equivalent @@@')
-
-    mk1.fillWithValues()
+    # after training (replaces zeros with small values)
+    mk1.fillDiffLayer()
