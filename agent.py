@@ -55,7 +55,6 @@ class _net:
   modelNext = None
   actionOnModel = 'None'
   dictDiffLayer = {}
-  progress = 0.0
 
   def __init__(self, name, listNameInput, listNameOutput, listNameLayer, dictLayer, dictGraph):
     self.name = name
@@ -394,8 +393,9 @@ class _net:
         heightOutput = int((dimensionInputNew[1] - 1) * stride) - 2 * padding + sizeKernel
         depthOutput = dimensionLayer[1]
         layerEnd.dimension[0] += widthOutput * heightOutput * depthOutput
-    dimensionExtra.append(copy.deepcopy(layerEnd.dimension[0]) - 1)
-    return dimensionExtra
+    dimensionExtra.append(copy.deepcopy(layerEnd.dimension[0]))
+    dictPathAdded = {nameLayer: [], nameLayerEnd: [dimensionExtra]}
+    return dictPathAdded
 
   def actionAdd(self, positionStart, positionEnd, sizeFilter, numFilter, sizeLinear):
     self.actionOnModel = 'None'
@@ -474,10 +474,10 @@ class _net:
       dimensionLayer = self.getLayerDimensionC2C(dimensionOutput, dimensionInput, numFilter, sizeFilter, True)
     else:
       return False
-    dimensionExtra = self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
+    dictPathAdded = self.addLayer(layerStart, layerEnd, typeLayer, dimensionLayer)
     print ('\n@@@ graph is valid:', self.validateGraph(), '@@@')
     self.actionOnModel = 'Add'
-    self.dictDiffLayer = {nameLayerEnd: [dimensionExtra]}
+    self.dictDiffLayer = dictPathAdded
     return True
 
   def getPath(self, nameLayerStart, nameLayerEnd):
@@ -816,13 +816,15 @@ class _net:
         # TODO initialize with small values instead of zeros
         paraNew = np.zeros(paraNew.shape)
         typeLayer = self.dictLayer[nameLayer]._type
-        if typeLayer == 'Conv2d':
-          paraNew[:, : self.dictDiffLayer[nameLayer][0][0], :, :] = paraOld
-        elif typeLayer == 'Linear':
-          paraNew[:, : self.dictDiffLayer[nameLayer][0][0]] = paraOld
-        elif typeLayer == 'ConvTranspose2d':
-          paraNew[: self.dictDiffLayer[nameLayer][0][0], :, :, :] = paraOld
-        stateDict[key] = torch.tensor(paraNew).cuda()
+        for pathInit in self.dictDiffLayer[nameLayer]:
+          if not len(pathInit) == 0:
+            if typeLayer == 'Conv2d':
+              paraNew[:, : pathInit[0], :, :] = paraOld
+            elif typeLayer == 'Linear':
+              paraNew[:, : pathInit[0]] = paraOld
+            elif typeLayer == 'ConvTranspose2d':
+              paraNew[: pathInit[0], :, :, :] = paraOld
+            stateDict[key] = torch.tensor(paraNew).cuda()
       else:
         stateDict[key] = self.modelNow.state_dict()[key]
     self.modelNext.load_state_dict(stateDict)
@@ -837,35 +839,36 @@ class _net:
           typeLayer = self.dictLayer[nameLayer]._type
           paraOld = self.modelNow.state_dict()[key].cpu().data.numpy()
           paraNew = self.modelNext.state_dict()[key].cpu().data.numpy()
+          dimensionEnd = 1
+          if typeLayer == 'Conv2d':
+            dimensionEnd = 1
+          elif typeLayer == 'Linear':
+            dimensionEnd = 1
+          elif typeLayer == 'ConvTranspose2d':
+            dimensionEnd = 0
+          totalInterval = len(dimensionTrimed) + 1
+          if dimensionTrimed[0][0] == 0:
+            totalInterval -= 1
+          if dimensionTrimed[-1][1] == paraOld.shape[dimensionEnd]:
+            totalInterval -= 1
           startOld = 0
           endOld = 0
           startNew = 0
           endNew = 0
-          for interval in range(len(dimensionTrimed) + 1):
-            if interval == 0:
-              if dimensionTrimed[0][0] != 0:
-                startOld = 0
-                endOld = dimensionTrimed[0][0]
-                startNew = 0
-                endNew = dimensionTrimed[0][0]
-              else:
-                continue
-            elif interval == len(dimensionTrimed):
-              dimensionEnd = 1
-              if typeLayer == 'ConvTranspose2d':
-                dimensionEnd = 0
-              if dimensionTrimed[interval - 1][1] != paraOld.shape[dimensionEnd]:
-                startOld = dimensionTrimed[len(dimensionTrimed) - 1][1]
-                endOld = paraOld.shape[dimensionEnd]
-                startNew = endNew
-                endNew = paraNew.shape[dimensionEnd]
-              else:
-                continue
+          countTrimed = 0
+          for interval in range(totalInterval):
+            if interval == 0 and dimensionTrimed[0][0] != 0:
+              startOld = 0
+              endOld = dimensionTrimed[0][0]
+            elif interval == totalInterval - 1 and dimensionTrimed[-1][1] != paraOld.shape[dimensionEnd]:
+              startOld = dimensionTrimed[-1][1]
+              endOld = paraOld.shape[dimensionEnd]
             else:
-              startOld = dimensionTrimed[interval - 1][1]
-              endOld = dimensionTrimed[interval][0]
-              startNew = endNew
-              endNew = startNew + dimensionTrimed[interval][0] - dimensionTrimed[interval - 1][1]
+              startOld = dimensionTrimed[countTrimed][1]
+              endOld = dimensionTrimed[countTrimed + 1][0]
+              countTrimed += 1
+            startNew = endNew
+            endNew = startNew + endOld - startOld
             if typeLayer == 'Conv2d':
               paraNew[:, startNew : endNew, :, :] = paraOld[:, startOld : endOld, :, :]
             elif typeLayer == 'Linear':
@@ -879,51 +882,136 @@ class _net:
         stateDictNew[key] = self.modelNow.state_dict()[key]
     self.modelNext.load_state_dict(stateDictNew)
 
-  def fillDiffLayer(self):
-    # gradually replacing 'dictDiffLayer''s zeros parameters with small values
-    stateDictOld = self.modelNow.state_dict()
-    for key in self.modelNow.state_dict():
+  def fillAllDiffLayer(self):
+    # replacing all 'dictDiffLayer''s zeros parameters with small values
+    stateDictNext = self.modelNext.state_dict()
+    for key in self.modelNext.state_dict():
       nameLayer = key.split('.')[0]
       if 'weight' in key and nameLayer in self.dictDiffLayer:
-        paraOld = self.modelNow.state_dict()[key].cpu().data.numpy()
+        paraNew = self.modelNext.state_dict()[key].cpu().data.numpy()
         bound = 1.0
         if self.dictLayer[nameLayer]._type == 'Conv2d':
-          bound = 1.0 / ((paraOld.shape[1] * paraOld.shape[2] * paraOld.shape[3]) ** 0.5)
+          bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
         elif self.dictLayer[nameLayer]._type == 'Linear':
-          bound = 1.0 / (paraOld.shape[1] ** 0.5)
+          bound = 1.0 / (paraNew.shape[1] ** 0.5)
         elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
-          bound = 1.0 / ((paraOld.shape[1] * paraOld.shape[2] * paraOld.shape[3]) ** 0.5)
-        paraInit = np.random.uniform(-bound, bound, paraOld.shape)
+          bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
+        paraInit = np.random.uniform(-bound, bound, paraNew.shape)
         for pathInit in self.dictDiffLayer[nameLayer]:
-          if self.dictLayer[nameLayer]._type == 'Conv2d':
-            paraOld[:, pathInit[0] : pathInit[1], :, :] = paraInit[:, pathInit[0] : pathInit[1], :, :]
-          elif self.dictLayer[nameLayer]._type == 'Linear':
-            paraOld[:, pathInit[0] : pathInit[1]] = paraInit[:, pathInit[0] : pathInit[1]]
-          elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
-            paraOld[pathInit[0] : pathInit[1], :, :, :] = paraInit[pathInit[0] : pathInit[1], :, :, :]
-        stateDictOld[key] = torch.tensor(paraOld).cuda()
-      self.modelNow.load_state_dict(stateDictOld)
+          if not len(pathInit) == 0:
+            if self.dictLayer[nameLayer]._type == 'Conv2d':
+              paraNew[:, pathInit[0] : pathInit[1], :, :] = paraInit[:, pathInit[0] : pathInit[1], :, :]
+            elif self.dictLayer[nameLayer]._type == 'Linear':
+              paraNew[:, pathInit[0] : pathInit[1]] = paraInit[:, pathInit[0] : pathInit[1]]
+            elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+              paraNew[pathInit[0] : pathInit[1], :, :, :] = paraInit[pathInit[0] : pathInit[1], :, :, :]
+        stateDictNext[key] = torch.tensor(paraNew).cuda()
+      self.modelNext.load_state_dict(stateDictNext)
+    return 1.0
 
-  def trimDiffLayer(self):
+  def trimAllDiffLayer(self, model):
+    # replacing all 'dictDiffLayer' parameters with zeros
+    stateDict = model.state_dict()
+    for key in model.state_dict():
+      nameLayer = key.split('.')[0]
+      if nameLayer in self.dictDiffLayer:
+        if 'weight' in key and len(self.dictDiffLayer[nameLayer]) > 0:
+          dimensionTrimed = self.dictDiffLayer[nameLayer]
+          typeLayer = self.dictLayer[nameLayer]._type
+          parameter = model.state_dict()[key].cpu().data.numpy()
+          for pathTrimed in dimensionTrimed:
+            paraZeros = np.zeros(parameter.shape)
+            if typeLayer == 'Conv2d':
+              parameter[:, pathTrimed[0] : pathTrimed[1], :, :] = paraZeros[:, pathTrimed[0] : pathTrimed[1], :, :]
+            elif typeLayer == 'Linear':
+              parameter[:, pathTrimed[0] : pathTrimed[1]] = paraZeros[:, pathTrimed[0] : pathTrimed[1]]
+            elif typeLayer == 'ConvTranspose2d':
+              parameter[pathTrimed[0] : pathTrimed[1], :, :, :] = paraZeros[pathTrimed[0] : pathTrimed[1], :, :, :]
+            stateDict[key] = torch.tensor(parameter).cuda()
+    model.load_state_dict(stateDict)
+    return 1.0
+
+  def fillDiffLayer(self, progress, delta = 0.5):
+    # gradually replacing 'dictDiffLayer''s zeros parameters with small values
+    stateDictNext = self.modelNext.state_dict()
+    for key in self.modelNext.state_dict():
+      nameLayer = key.split('.')[0]
+      if 'weight' in key and nameLayer in self.dictDiffLayer:
+        paraNew = self.modelNext.state_dict()[key].cpu().data.numpy()
+        bound = 1.0
+        if self.dictLayer[nameLayer]._type == 'Conv2d':
+          bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
+        elif self.dictLayer[nameLayer]._type == 'Linear':
+          bound = 1.0 / (paraNew.shape[1] ** 0.5)
+        elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+          bound = 1.0 / ((paraNew.shape[1] * paraNew.shape[2] * paraNew.shape[3]) ** 0.5)
+        paraInit = np.random.uniform(-bound, bound, paraNew.shape)
+        shapePara = paraNew.shape
+        for pathInit in self.dictDiffLayer[nameLayer]:
+          totalPara = 0
+          if self.dictLayer[nameLayer]._type == 'Conv2d':
+            maskOld = np.ones((shapePara[0], (pathInit[1] - pathInit[0]), shapePara[2], shapePara[3]))
+            maskOld = maskOld * np.isclose(paraNew[:, pathInit[0] : pathInit[1], :, :], 0.0)
+            totalPara = shapePara[0] * (pathInit[1] - pathInit[0]) * shapePara[2] * shapePara[3]
+          elif self.dictLayer[nameLayer]._type == 'Linear':
+            maskOld = np.ones((shapePara[0], (pathInit[1] - pathInit[0])))
+            maskOld = maskOld * np.isclose(paraNew[:, pathInit[0] : pathInit[1]], 0.0)
+            totalPara = shapePara[0] * (pathInit[1] - pathInit[0])
+          elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+            maskOld = np.ones(((pathInit[1] - pathInit[0]), shapePara[1], shapePara[2], shapePara[3]))
+            maskOld = maskOld * np.isclose(paraNew[pathInit[0] : pathInit[1], :, :, :], 0.0)
+            totalPara = (pathInit[1] - pathInit[0]) * shapePara[1] * shapePara[2] * shapePara[3]
+          maskNew = np.zeros(totalPara)
+          maskNew[: int(min(progress + delta, 1.0) * totalPara)] = 1.0
+          np.random.shuffle(maskNew)
+          if self.dictLayer[nameLayer]._type == 'Conv2d':
+            maskNew = maskNew.reshape(shapePara[0], pathInit[1] - pathInit[0], shapePara[2], shapePara[3])
+            maskNew = maskNew * maskOld
+            paraNew[:, pathInit[0] : pathInit[1], :, :] += maskNew * paraInit[:, pathInit[0] : pathInit[1], :, :]
+          elif self.dictLayer[nameLayer]._type == 'Linear':
+            maskNew = maskNew.reshape(shapePara[0], pathInit[1] - pathInit[0])
+            maskNew = maskNew * maskOld
+            paraNew[:, pathInit[0] : pathInit[1]] += maskNew * paraInit[:, pathInit[0] : pathInit[1]]
+          elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+            maskNew = maskNew.reshape(pathInit[1] - pathInit[0], shapePara[1], shapePara[2], shapePara[3])
+            maskNew = maskNew * maskOld
+            paraNew[pathInit[0] : pathInit[1], :, :, :] += maskNew * paraInit[pathInit[0] : pathInit[1], :, :, :]
+          stateDictNext[key] = torch.tensor(paraNew).cuda()
+    self.modelNext.load_state_dict(stateDictNext)
+    return min(progress + delta, 1.0)
+
+  def trimDiffLayer(self, progress, delta = 0.5):
     # gradually replacing 'dictDiffLayer' parameters with zeros
     stateDictOld = self.modelNow.state_dict()
     for key in self.modelNow.state_dict():
       nameLayer = key.split('.')[0]
       if nameLayer in self.dictDiffLayer:
         if 'weight' in key and len(self.dictDiffLayer[nameLayer]) > 0:
-          dimensionTrimed = self.dictDiffLayer[nameLayer]
-          typeLayer = self.dictLayer[nameLayer]._type
           paraOld = self.modelNow.state_dict()[key].cpu().data.numpy()
-          for pathTrimed in dimensionTrimed:
-            paraZeros = np.zeros(paraOld.shape)
-            if typeLayer == 'Conv2d':
-              paraOld[:, pathTrimed[0] : pathTrimed[1], :, :] = paraZeros[:, pathTrimed[0] : pathTrimed[1], :, :]
-            elif typeLayer == 'Linear':
-              paraOld[:, pathTrimed[0] : pathTrimed[1]] = paraZeros[:, pathTrimed[0] : pathTrimed[1]]
-            elif typeLayer == 'ConvTranspose2d':
-              paraOld[pathTrimed[0] : pathTrimed[1], :, :, :] = paraZeros[pathTrimed[0] : pathTrimed[1], :, :, :]
-            stateDictOld[key] = torch.tensor(paraOld).cuda()
+          shapePara = paraOld.shape
+          for pathTrim in self.dictDiffLayer[nameLayer]:
+            totalPara = 0
+            if self.dictLayer[nameLayer]._type == 'Conv2d':
+              totalPara = shapePara[0] * (pathTrim[1] - pathTrim[0]) * shapePara[2] * shapePara[3]
+            elif self.dictLayer[nameLayer]._type == 'Linear':
+              totalPara = shapePara[0] * (pathTrim[1] - pathTrim[0])
+            elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+              totalPara = (pathTrim[1] - pathTrim[0]) * shapePara[1] * shapePara[2] * shapePara[3]
+            maskNew = np.ones(totalPara)
+            maskNew[: int(min(progress + delta, 1.0) * totalPara)] = 0.0
+            np.random.shuffle(maskNew)
+            if self.dictLayer[nameLayer]._type == 'Conv2d':
+              maskNew = maskNew.reshape(shapePara[0], pathTrim[1] - pathTrim[0], shapePara[2], shapePara[3])
+              paraOld[:, pathTrim[0] : pathTrim[1], :, :] = maskNew * paraOld[:, pathTrim[0] : pathTrim[1], :, :]
+            elif self.dictLayer[nameLayer]._type == 'Linear':
+              maskNew = maskNew.reshape(shapePara[0], pathTrim[1] - pathTrim[0])
+              paraOld[:, pathTrim[0] : pathTrim[1]] = maskNew * paraOld[:, pathTrim[0] : pathTrim[1]]
+            elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+              maskNew = maskNew.reshape(pathTrim[1] - pathTrim[0], shapePara[1], shapePara[2], shapePara[3])
+              paraOld[pathTrim[0] : pathTrim[1], :, :, :] = maskNew * paraOld[pathTrim[0] : pathTrim[1], :, :, :]
+          stateDictOld[key] = torch.tensor(paraOld).cuda()
     self.modelNow.load_state_dict(stateDictOld)
+    return min(progress + delta, 1.0)
 
   def compareModelResult(self):
     # testing output for both models
@@ -966,6 +1054,56 @@ class _net:
         print ('\naverage error:', np.sum(np.abs(outNew - outOld)) / len(outNew))
         exit()
     print ('\n@@@ models\' outputs are equivalent @@@')
+
+  def countDiffLayer(self, model):
+    dictCountDiffLayer = {}
+    for key in model.state_dict():
+      nameLayer = key.split('.')[0]
+      if nameLayer in self.dictDiffLayer:
+        if 'weight' in key and len(self.dictDiffLayer[nameLayer]) > 0:
+          parameter = model.state_dict()[key].cpu().data.numpy()
+          dictCountDiffLayer[nameLayer] = {'totalAll': 0, 'nonZeroAll': 0, 'total': 0, 'nonZero': 0}
+          lengthAll = 1
+          for shape in parameter.shape:
+            lengthAll *= shape
+          dictCountDiffLayer[nameLayer]['totalAll'] = lengthAll
+          dictCountDiffLayer[nameLayer]['nonZeroAll'] = np.count_nonzero(parameter)
+          for pathDiff in self.dictDiffLayer[nameLayer]:
+            if self.dictLayer[nameLayer]._type == 'Conv2d':
+              paraDiff = parameter[:, pathDiff[0] : pathDiff[1] :, :]
+            elif self.dictLayer[nameLayer]._type == 'Linear':
+              paraDiff = parameter[:, pathDiff[0] : pathDiff[1]]
+            elif self.dictLayer[nameLayer]._type == 'ConvTranspose2d':
+              paraDiff = parameter[pathDiff[0] : pathDiff[1] :, :, :]
+            length = 1
+            for shape in paraDiff.shape:
+              length *= shape
+            dictCountDiffLayer[nameLayer]['total'] += length
+            dictCountDiffLayer[nameLayer]['nonZero'] += np.count_nonzero(paraDiff)
+    return dictCountDiffLayer
+
+  def compareModel(self):
+    # compare layers' parameters of both models
+    print (self.modelNow)
+    print (self.modelNext)
+    for nameLayer in self.dictDiffLayer:
+      if len(self.dictDiffLayer[nameLayer]) > 0:
+        paraOld = self.modelNow.state_dict()[nameLayer + '.weight'].cpu().data.numpy()
+        paraNew = self.modelNext.state_dict()[nameLayer + '.weight'].cpu().data.numpy()
+        for pathDiff in self.dictDiffLayer[nameLayer]:
+          typeLayer = self.dictLayer[nameLayer]._type
+          print ('paraOld shape:', paraOld.shape)
+          print ('paraNew shape:', paraNew.shape)
+          print ('pathDiff:', pathDiff)
+          if typeLayer == 'Conv2d':
+            print ('\nparaNew:\n', paraNew[:, pathDiff[0] : pathDiff[1], :, :])
+            #print ((paraOld[:, : pathDiff[0], :, :] == paraNew[:, : pathDiff[1], :, :]).all())
+          elif typeLayer == 'Linear':
+            print ('\nparaNew:\n', paraNew[:, pathDiff[0] : pathDiff[1]])
+            #print ((paraOld[:, : pathDiff[0]] == paraNew[:, : pathDiff[1]]).all())
+          elif typeLayer == 'ConvTranspose2d':
+            print ('\nparaNew:\n', paraNew[pathDiff[0] : pathDiff[1], :, :, :])
+            #print ((paraOld[: pathDiff[0], :, :, :] == paraNew[: pathDiff[1], :, :, :]).all())
 
 # Conv2d -> Conv2d -> Linear -> Linear -> ConvTranspose2d -> ConvTranspose2d
 input1 = _layer('input1', 'Input', [120, 120, 3])
@@ -1059,25 +1197,61 @@ while True:
     if mk1.actionOnModel == 'Add':
       mk1.modifyModelAdd()
       mk1.compareModelResult()
-      mk1.modelNow = mk1.modelNext
     elif mk1.actionOnModel == 'Remove':
       pass
 
     # training on ModelNow
-    mk1.progress = 0.0
-    while mk1.progress < 1.0:
+    progress = 0.0
+    while progress < 1.0:
       if mk1.actionOnModel == 'Add':
-        mk1.fillDiffLayer()
+        # training target: mk1.modelNext
+        #progress = mk1.fillAllDiffLayer()
+        progress = mk1.fillDiffLayer(progress)
       elif mk1.actionOnModel == 'Remove':
-        mk1.trimDiffLayer()
-      mk1.progress = 1.0
+        # training target: mk1.modelNow
+        #progress = mk1.trimAllDiffLayer(mk1.modelNow)
+        progress = mk1.trimDiffLayer(progress)
+      print ('\nprogress:', progress)
+
+    if mk1.actionOnModel == 'Add':
+      dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNext)
+      # validation by checking number of zeros in diffLayer
+      for nameLayer in dictCountDiffLayer:
+        nonZero = dictCountDiffLayer[nameLayer]['nonZero']
+        total = dictCountDiffLayer[nameLayer]['total']
+        if nonZero != total:
+          print ('ADD (fillDiffLayer) has problem')
+          print ('nonZero:', nonZero, 'total:', total)
+          exit()
+      # trim diffLayer and then compare again
+      mk1.trimAllDiffLayer(mk1.modelNext)
+      mk1.compareModelResult()
+      mk1.fillAllDiffLayer()
+    elif mk1.actionOnModel == 'Remove':
+      dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNow)
+      # validation by checking number of zeros in diffLayer
+      for nameLayer in dictCountDiffLayer:
+        nonZero = dictCountDiffLayer[nameLayer]['nonZero']
+        total = dictCountDiffLayer[nameLayer]['total']
+        if nonZero != 0:
+          print ('REMOVE (trimDiffLayer) has problem')
+          print ('nonZero:', nonZero, 'total:', total)
+          exit()
 
     if mk1.actionOnModel == 'Add':
       pass
     elif mk1.actionOnModel == 'Remove':
       mk1.modifyModelRemove()
       mk1.compareModelResult()
-      mk1.modelNow = mk1.modelNext
+
+      # check if any diffLayer's parameter is zero
+      dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNext)
+      for nameLayer in dictCountDiffLayer:
+        nonZeroAll = dictCountDiffLayer[nameLayer]['nonZeroAll']
+        totalAll = dictCountDiffLayer[nameLayer]['totalAll']
+        if nonZeroAll != totalAll:
+          print ('REMOVE (modifyModelRemove) has problem')
+          print ('nonZeroAll:', nonZeroAll, 'totalAll:', totalAll)
+          exit()
+
     historyAction.append(mk1.actionOnModel)
-    # after training (replaces zeros with small values)
-    mk1.fillDiffLayer()
