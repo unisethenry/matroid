@@ -5,31 +5,38 @@ import torch
 import random
 import numpy as np
 
+DEBUG = False
+
 class _layer:
   name = ''
   _type = ''
-  birthday = 0
   dimension = []
+  birthday = 0
+  size = 0
   dictDimensionInput = {}
   dimensionInputResult = []
   dimensionOutputResult = []
 
   def __init__(self, name, _type, dimension, birthday = 0, dimensionInputResult = []):
-    self.name = name
-    self._type = _type
-    self.dimension = dimension
-    self.birthday = birthday
     if not (_type == 'Input' or _type == 'Output' or _type == 'Conv2d' or _type == 'Linear' or _type == 'ConvTranspose2d'):
       print ('unknown layer type for layer:', name)
       exit()
-    # Conv2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
-    # Linear dimension: [in_features, out_features]
-    # ConvTranspose2d dimension: [in_channels, out_channels, kernel_size, stride, padding]
     if _type == 'ConvTranspose2d':
       if not dimensionInputResult or len(dimensionInputResult) != 3:
         print ('\n\'ConvTranspose2d\' layer (' + name + ') must specify 3D input dimension!')
         exit()
       self.dimensionInputResult = dimensionInputResult
+    # Conv2d: [in_channels, out_channels, kernel_size, stride, padding]
+    # Linear: [in_features, out_features]
+    # ConvTranspose2d: [in_channels, out_channels, kernel_size, stride, padding]
+    self.name = name
+    self._type = _type
+    self.dimension = dimension
+    self.birthday = birthday
+    if _type == 'Conv2d' or _type == 'ConvTranspose2d':
+      self.size = self.dimension[0] * self.dimension[1] * self.dimension[2] * self.dimension[2]
+    elif _type == 'Linear':
+      self.size = self.dimension[0] * self.dimension[1]
     if _type == 'Input':
       self.dimensionOutputResult = dimension
     elif _type == 'Output':
@@ -50,6 +57,7 @@ class _net:
   birthdayLatest = 0
   # non-essential
   dictGraphReversed = {}
+  listHierarchy = []
   # pyTorch related
   modelNow = None
   modelNext = None
@@ -109,6 +117,7 @@ class _net:
     return True
 
   def computeReversedGraph(self):
+    self.dictGraphReversed = {}
     for nameLayer in self.listNameLayer:
       self.dictGraphReversed[nameLayer] = []
     for nameOutput in self.listNameOutput:
@@ -128,8 +137,7 @@ class _net:
         dictReversed[nameLayerEnd].append(nameLayerStart)
     return dictReversed
 
-  def computeLayerPrecedence(self):
-    self.dictGraphReversed = {}
+  def _computeLayerPrecedence(self):
     self.computeReversedGraph()
     listNameLayer = []
     listNameLayerNotReady = copy.deepcopy(self.listNameLayer)
@@ -156,6 +164,34 @@ class _net:
         print (nameLayer, self.dictGraph[nameLayer], self.dictGraphReversed[nameLayer])
       self.exitGateway(6)
     self.listNameLayer = listNameLayer
+
+  def computeLayerPrecedence(self):
+    self.computeReversedGraph()
+    listHierarchy = []
+    listReady = []
+    listNotReady = copy.deepcopy(self.listNameLayer)
+    while len(listReady) != len(self.listNameLayer):
+      countReady = len(listReady)
+      listSameLevel = []
+      for nameLayer in listNotReady:
+        isReady = True
+        for nameSource in self.dictGraphReversed[nameLayer]:
+          if not ('input' in nameSource or nameSource in listReady):
+            isReady = False
+            break
+        if isReady:
+          listNotReady.remove(nameLayer)
+          listReady.append(nameLayer)
+          listSameLevel.append(nameLayer)
+      if countReady == len(listReady):
+        print ('\nlayer(s) not ready:\n', listNotReady)
+        print ('\nlayer(s) ready:\n', listReady)
+        for nameLayer in listNameLayerNotReady:
+          print (nameLayer, self.dictGraph[nameLayer], self.dictGraphReversed[nameLayer])
+        self.exitGateway(6)
+      listHierarchy.append(listSameLevel)
+    self.listHierarchy = listHierarchy
+    self.listNameLayer = listReady
 
   def validateDimension(self):
     if not self.validateConnection():
@@ -1196,62 +1232,65 @@ while True:
     print ('\ndiffLayer:', mk1.dictDiffLayer)
     if mk1.actionOnModel == 'Add':
       mk1.modifyModelAdd()
-      mk1.compareModelResult()
+      if DEBUG:
+        mk1.compareModelResult()
     elif mk1.actionOnModel == 'Remove':
       pass
-
-    # training on ModelNow
+    # training
     progress = 0.0
     while progress < 1.0:
       if mk1.actionOnModel == 'Add':
         # training target: mk1.modelNext
         #progress = mk1.fillAllDiffLayer()
-        progress = mk1.fillDiffLayer(progress)
+        progress = mk1.fillDiffLayer(progress, 0.5)
       elif mk1.actionOnModel == 'Remove':
         # training target: mk1.modelNow
         #progress = mk1.trimAllDiffLayer(mk1.modelNow)
-        progress = mk1.trimDiffLayer(progress)
+        progress = mk1.trimDiffLayer(progress, 0.5)
       print ('\nprogress:', progress)
 
-    if mk1.actionOnModel == 'Add':
-      dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNext)
-      # validation by checking number of zeros in diffLayer
-      for nameLayer in dictCountDiffLayer:
-        nonZero = dictCountDiffLayer[nameLayer]['nonZero']
-        total = dictCountDiffLayer[nameLayer]['total']
-        if nonZero != total:
-          print ('ADD (fillDiffLayer) has problem')
-          print ('nonZero:', nonZero, 'total:', total)
-          exit()
-      # trim diffLayer and then compare again
-      mk1.trimAllDiffLayer(mk1.modelNext)
-      mk1.compareModelResult()
-      mk1.fillAllDiffLayer()
-    elif mk1.actionOnModel == 'Remove':
-      dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNow)
-      # validation by checking number of zeros in diffLayer
-      for nameLayer in dictCountDiffLayer:
-        nonZero = dictCountDiffLayer[nameLayer]['nonZero']
-        total = dictCountDiffLayer[nameLayer]['total']
-        if nonZero != 0:
-          print ('REMOVE (trimDiffLayer) has problem')
-          print ('nonZero:', nonZero, 'total:', total)
-          exit()
+    if DEBUG:
+      if mk1.actionOnModel == 'Add':
+        dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNext)
+        # validation by checking number of zeros in diffLayer
+        for nameLayer in dictCountDiffLayer:
+          nonZero = dictCountDiffLayer[nameLayer]['nonZero']
+          total = dictCountDiffLayer[nameLayer]['total']
+          if nonZero != total:
+            print ('ADD (fillDiffLayer) has problem')
+            print ('nonZero:', nonZero, 'total:', total)
+            exit()
+        # trim diffLayer and then compare again
+        mk1.trimAllDiffLayer(mk1.modelNext)
+        mk1.compareModelResult()
+        mk1.fillAllDiffLayer()
+      elif mk1.actionOnModel == 'Remove':
+        dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNow)
+        # validation by checking number of zeros in diffLayer
+        for nameLayer in dictCountDiffLayer:
+          nonZero = dictCountDiffLayer[nameLayer]['nonZero']
+          total = dictCountDiffLayer[nameLayer]['total']
+          if nonZero != 0:
+            print ('REMOVE (trimDiffLayer) has problem')
+            print ('nonZero:', nonZero, 'total:', total)
+            exit()
 
     if mk1.actionOnModel == 'Add':
       pass
     elif mk1.actionOnModel == 'Remove':
       mk1.modifyModelRemove()
-      mk1.compareModelResult()
+      if DEBUG:
+        mk1.compareModelResult()
 
-      # check if any diffLayer's parameter is zero
-      dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNext)
-      for nameLayer in dictCountDiffLayer:
-        nonZeroAll = dictCountDiffLayer[nameLayer]['nonZeroAll']
-        totalAll = dictCountDiffLayer[nameLayer]['totalAll']
-        if nonZeroAll != totalAll:
-          print ('REMOVE (modifyModelRemove) has problem')
-          print ('nonZeroAll:', nonZeroAll, 'totalAll:', totalAll)
-          exit()
+      if DEBUG:
+        # check if any diffLayer's parameter is zero
+        dictCountDiffLayer = mk1.countDiffLayer(mk1.modelNext)
+        for nameLayer in dictCountDiffLayer:
+          nonZeroAll = dictCountDiffLayer[nameLayer]['nonZeroAll']
+          totalAll = dictCountDiffLayer[nameLayer]['totalAll']
+          if nonZeroAll != totalAll:
+            print ('REMOVE (modifyModelRemove) has problem')
+            print ('nonZeroAll:', nonZeroAll, 'totalAll:', totalAll)
+            exit()
 
     historyAction.append(mk1.actionOnModel)
